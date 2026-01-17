@@ -1,0 +1,131 @@
+# GitHub Actions - 月度主题一致性审计
+# 每月自动执行主题一致性审计并生成报告
+
+name: Monthly Theme Audit
+
+on:
+  schedule:
+    # 每月1号凌晨2点执行 (UTC时间，北京时间10点)
+    - cron: '0 2 1 * *'
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  theme-audit:
+    name: Theme Consistency Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+    
+    - name: Install dependencies
+      run: |
+        cd frontend
+        npm ci
+    
+    - name: Run theme audit
+      id: audit
+      run: |
+        cd frontend
+        npm run audit:theme:ci || echo "audit_failed=true" >> $GITHUB_OUTPUT
+      continue-on-error: true
+    
+    - name: Upload audit reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: theme-audit-reports-${{ github.run_number }}
+        path: frontend/audit-reports/
+        retention-days: 90
+    
+    - name: Read audit summary
+      id: summary
+      if: always()
+      run: |
+        cd frontend
+        if [ -f audit-reports/latest-audit.json ]; then
+          TOTAL=$(jq '.summary.totalViolations' audit-reports/latest-audit.json)
+          CRITICAL=$(jq '.summary.criticalViolations' audit-reports/latest-audit.json)
+          WARNING=$(jq '.summary.warningViolations' audit-reports/latest-audit.json)
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+          echo "warning=$WARNING" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Create Issue for violations
+      if: steps.summary.outputs.total > 0
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const total = '${{ steps.summary.outputs.total }}';
+          const critical = '${{ steps.summary.outputs.critical }}';
+          const warning = '${{ steps.summary.outputs.warning }}';
+          
+          const body = `## 🔍 月度主题一致性审计报告
+          
+          **审计时间**: ${new Date().toLocaleString('zh-CN')}
+          **审计结果**: ⚠️ 发现违规
+          
+          ### 📊 统计摘要
+          
+          - **总违规数**: ${total}
+          - **严重违规**: ${critical} 🔴
+          - **警告违规**: ${warning} ⚠️
+          
+          ### 📝 详细报告
+          
+          详细的审计报告已上传到 [Artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          
+          ### 💡 建议行动
+          
+          1. **立即处理**: 修复所有严重违规（硬编码颜色）
+          2. **计划处理**: 逐步修复警告违规（硬编码间距、字体、圆角）
+          3. **预防措施**: 确保ESLint规则已启用，防止新的违规
+          
+          ### 🔗 相关资源
+          
+          - [主题使用指南](../THEME_USAGE_GUIDE.md)
+          - [主题迁移指南](../THEME_MIGRATION_GUIDE.md)
+          - [ESLint配置](.eslintrc.cjs)
+          `;
+          
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: \`[主题审计] \${new Date().toISOString().split('T')[0]} - 发现 \${total} 个违规\`,
+            body: body,
+            labels: ['theme-consistency', 'audit', 'technical-debt']
+          });
+    
+    - name: Comment on success
+      if: steps.summary.outputs.total == 0
+      uses: actions/github-script@v7
+      with:
+        script: |
+          console.log('✅ 主题一致性审计通过，未发现违规');
+    
+    - name: Generate trend data
+      if: always()
+      run: |
+        cd frontend
+        mkdir -p audit-reports/history
+        DATE=$(date +%Y-%m-%d)
+        cp audit-reports/latest-audit.json audit-reports/history/audit-$DATE.json
+    
+    - name: Commit audit history
+      if: always()
+      run: |
+        cd frontend
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add audit-reports/history/
+        git diff --quiet && git diff --staged --quiet || git commit -m "chore: add theme audit history for $(date +%Y-%m-%d)"
+        git push
+      continue-on-error: true

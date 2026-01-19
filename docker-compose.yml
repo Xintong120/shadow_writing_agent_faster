@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # PostgreSQL数据库
+  postgres:
+    image: postgres:16-alpine
+    container_name: shadow-writing-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-shadow_writing}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+      POSTGRES_DB: ${POSTGRES_DB:-shadow_writing_db}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docs/deployment/scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - shadow-writing-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shadow_writing}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Langfuse (可观测性平台) - 可选
+  langfuse-server:
+    image: langfuse/langfuse:latest
+    container_name: shadow-writing-langfuse
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-shadow_writing}:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/${LANGFUSE_DB:-langfuse_db}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-generate_a_random_secret_here}
+      SALT: ${LANGFUSE_SALT:-generate_a_random_salt_here}
+      NEXTAUTH_URL: ${LANGFUSE_URL:-http://localhost:3000}
+      TELEMETRY_ENABLED: ${LANGFUSE_TELEMETRY:-false}
+    ports:
+      - "${LANGFUSE_PORT:-3000}:3000"
+    networks:
+      - shadow-writing-network
+    restart: unless-stopped
+    profiles:
+      - langfuse  # 使用 --profile langfuse 启动
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  shadow-writing-network:
+    driver: bridge

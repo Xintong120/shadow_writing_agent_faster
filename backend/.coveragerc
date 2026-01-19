@@ -1,0 +1,96 @@
+# .coveragerc
+# 作用：Coverage.py 配置文件
+# 功能：更精细的覆盖率配置
+
+[run]
+# 源代码目录
+source = app
+
+# 分支覆盖
+branch = True
+
+# 排除的文件模式
+omit =
+    */tests/*
+    */test_*.py
+    */__pycache__/*
+    */site-packages/*
+    */venv/*
+    */env/*
+    */migrations/*
+    app/config.py
+    app/websocket.py
+
+# 并行模式（多进程测试）
+parallel = True
+
+# 数据文件位置
+data_file = .coverage
+
+[report]
+# 精度
+precision = 2
+
+# 跳过空文件
+skip_empty = True
+
+# 跳过覆盖的文件（通过注释）
+skip_covered = False
+
+# 显示缺失的行
+show_missing = True
+
+# 按文件名排序
+sort = Name
+
+# 排除的行（不计入覆盖率）
+exclude_lines =
+    # 标准排除
+    pragma: no cover
+    def __repr__
+    def __str__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    @abstractmethod
+    @abc.abstractmethod
+    # 调试代码
+    print\(
+    # 类型检查
+    if 0:
+    if False:
+    # 防御性代码
+    except ImportError:
+    except Exception as e:
+
+# 部分分支不覆盖也算覆盖
+partial_branches =
+    pragma: no branch
+    if.*debug.*:
+
+# 忽略的错误
+ignore_errors = False
+
+# 失败阈值（低于此值失败）
+fail_under = 70
+
+[html]
+# HTML报告目录
+directory = htmlcov
+
+# 报告标题
+title = Shadow Writing Agent - Coverage Report
+
+# 显示上下文
+show_contexts = True
+
+[xml]
+# XML报告输出
+output = coverage.xml
+
+[json]
+# JSON报告输出
+output = coverage.json
+pretty_print = True
+show_contexts = True

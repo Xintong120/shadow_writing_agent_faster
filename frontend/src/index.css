@@ -1,0 +1,105 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('@mantine/core/styles.css'); /* 添加Mantine基础样式 */
+
+/* BEGIN GENERATED: colors.js */
+/* END GENERATED: colors.js */
+
+/* 确保Mantine样式优先级高于TailwindCSS */
+@layer base {
+  :root {
+    /* Global scale factor for Mantine-style scaling */
+    --mantine-scale: 1;
+
+    /* Apply global scaling to root font size */
+    font-size: calc(1rem * var(--mantine-scale));
+
+    --background: 0 0 100;       /* #FFFFFF */
+    --foreground: 215 26 17;     /* #1F2937 */
+
+    --primary: 249 77% 56%;      /* #6B46C1 */
+    --primary-foreground: 0 0% 100%; /* #FFFFFF */
+
+    --secondary: 191 91% 46%;    /* #0891B2 */
+    --secondary-foreground: 0 0% 100%; /* #FFFFFF */
+
+    --accent: 25 95% 53%;        /* #EA580C */
+    --accent-foreground: 0 0% 100%; /* #FFFFFF */
+
+    --success: 160 84% 39%;      /* #10B981 */
+    --warning: 43 96% 56%;       /* #F59E0B */
+    --error: 0 84% 60%;          /* #EF4444 */
+    --info: 217 91% 60%;         /* #3B82F6 */
+
+    --card: 0 0% 100%;           /* #FFFFFF */
+    --card-foreground: 215 26% 17%; /* #1F2937 */
+
+    --border: 214 32% 91%;       /* #E5E7EB */
+    --input: 210 40% 98%;        /* #F9FAFB */
+    --ring: 249 77% 56%;         /* #6B46C1 */
+
+    --muted: 210 40% 98%;        /* #F3F4F6 */
+    --muted-foreground: 215 16% 47%; /* #6B7280 */
+
+    --radius: 0.5rem;
+  }
+  
+  .dark {
+    --background: 9 9 11;       /* #09090B */
+    --foreground: 250 250 250;
+    
+    --card: 24 24 27;           /* #18181B */
+    --card-foreground: 250 250 250;
+    
+    --border: 39 39 70;         /* #27272A */
+  }
+
+  /* 确保Mantine组件样式优先级高于TailwindCSS */
+  .mantine-App-root {
+    all: initial;
+    font-family: Inter, sans-serif;
+  }
+}
+
+@tailwind base;
+@tailwind components;
+/* ChatInput组件强制样式覆盖 - 解决loading状态下border变化问题 */
+.mantine-Textarea-input {
+  border: none !important;
+  box-shadow: none !important;
+  background-color: transparent !important;
+}
+
+.mantine-Textarea-input:focus {
+  border: none !important;
+  box-shadow: none !important;
+  background-color: transparent !important;
+  outline: none !important;
+}
+
+.mantine-Textarea-input:disabled {
+  border: none !important;
+  box-shadow: none !important;
+  background-color: transparent !important;
+}
+
+/* 确保在所有状态下都没有border */
+textarea[class*="mantine-Textarea"] {
+  border: none !important;
+  box-shadow: none !important;
+}
+
+textarea[class*="mantine-Textarea"]:focus {
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+}

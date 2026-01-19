@@ -1,0 +1,8 @@
+{
+    "http.proxy": "http://IP:PORT",
+    "https.proxy": "http://IP:PORT",
+    "workbench.startupEditor": "none",
+    "http.proxyStrictSSL": false,
+    "http.proxySupport": "on",
+    "http.systemCertificates": true
+}

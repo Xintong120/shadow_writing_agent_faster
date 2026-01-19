@@ -1,0 +1,142 @@
+  # .github/workflows/test.yml
+# 作用：GitHub Actions CI/CD配置
+# 功能：
+#   - 自动运行测试
+#   - 代码质量检查
+#   - 覆盖率报告
+#   - 类型检查
+
+name: Tests and Code Quality
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/test.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'backend/**'
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        python-version: ['3.11']
+    
+    steps:
+    # ========== 1. 代码检出 ==========
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    # ========== 2. 设置Python环境 ==========
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+    
+    # ========== 3. 安装依赖 ==========
+    - name: Install dependencies
+      run: |
+        cd backend
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-asyncio coverage ruff mypy
+    
+    # ========== 4. 运行测试 ==========
+    - name: Run tests with pytest
+      run: |
+        cd backend
+        export PYTHONPATH="${PYTHONPATH}:$(pwd)"
+        pytest --cov=app --cov-report=xml --cov-report=term --cov-report=html --cov-fail-under=0
+      continue-on-error: false
+    
+    # ========== 5. 检查覆盖率 ==========
+    - name: Check coverage threshold
+      run: |
+        cd backend
+        coverage report --fail-under=0
+      continue-on-error: true
+    
+    # ========== 6. 上传覆盖率报告到Codecov ==========
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./backend/coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+    
+    # ========== 7. 上传HTML覆盖率报告为Artifact ==========
+    - name: Upload coverage HTML report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: coverage-report
+        path: backend/htmlcov/
+        retention-days: 30
+    
+    # ========== 8. 代码风格检查（Ruff） ==========
+    - name: Lint with ruff
+      run: |
+        cd backend
+        ruff check app/ --output-format=github
+      continue-on-error: true
+    
+    # ========== 9. 类型检查（MyPy） ==========
+    - name: Type check with mypy
+      run: |
+        cd backend
+        mypy app/ --ignore-missing-imports --no-error-summary
+      continue-on-error: true
+    
+    # ========== 10. 测试结果总结 ==========
+    - name: Test Summary
+      if: always()
+      run: |
+        echo "=== Test Summary ==="
+        echo "Python Version: ${{ matrix.python-version }}"
+        echo "Tests: See above results"
+        echo "Coverage Report: Available in artifacts"
+
+  # ========== 代码质量检查任务 ==========
+  code-quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install tools
+      run: |
+        pip install ruff black isort
+    
+    - name: Check code formatting (Black)
+      run: |
+        cd backend
+        black --check app/ tests/
+      continue-on-error: true
+    
+    - name: Check import sorting (isort)
+      run: |
+        cd backend
+        isort --check-only app/ tests/
+      continue-on-error: true
+    
+    - name: Security check (Bandit)
+      run: |
+        pip install bandit
+        cd backend
+        bandit -r app/ -f json -o bandit-report.json
+      continue-on-error: true

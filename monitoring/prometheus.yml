@@ -1,0 +1,25 @@
+global:
+  scrape_interval: 15s # 每15秒收集一次指标
+  evaluation_interval: 15s # 每15秒评估告警规则
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # Shadow Writing 应用指标收集
+  - job_name: "shadow-writing-app"
+    static_configs:
+      - targets: ["host.docker.internal:8000"] # Docker访问主机地址
+    metrics_path: "/metrics" # Prometheus指标端点
+    scrape_interval: 15s # 覆盖全局设置
+
+  # Prometheus自身监控
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Node Exporter (如果需要收集系统级指标)
+  # - job_name: 'node'
+  #   static_configs:
+  #     - targets: ['node-exporter:9100']

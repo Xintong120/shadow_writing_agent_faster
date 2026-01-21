@@ -166,7 +166,11 @@ docs/
 test/
 temp_upload/
 scripts/
-electron/ 
+electron/
 node_modules
 test_connection_pool.py
 test_monitor.py
+
+# Additional ignores
+doc/
+langfuse_result/

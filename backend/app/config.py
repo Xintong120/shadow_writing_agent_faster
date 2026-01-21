@@ -54,6 +54,12 @@ class Settings(BaseSettings):
 
     # Shadow Writing 提供商选择
     use_mistral_for_shadow_writing: bool = False  # 是否使用 Mistral 进行 Shadow Writing
+
+    # Langfuse监控配置
+    langfuse_enabled: bool = False
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_base_url: str = "https://cloud.langfuse.com"
     
     # TED文件管理（缓存、删除）
     ted_cache_dir: str = "./data/ted_cache"

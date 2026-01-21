@@ -116,9 +116,19 @@ async def process_urls_batch(task_id: str, urls: List[str]):
                 "error_message": None
             }
             
-            # 运行并行工作流
+            # 运行并行工作流（带Langfuse监控）
             print("   启动并行Shadow Writing工作流...")
-            result = workflow.invoke(initial_state)
+            from app.main import langfuse_handler
+            if langfuse_handler:
+                from langchain_core.runnables import RunnableConfig
+                from typing import cast
+                from app.state import Shadow_Writing_State
+                config = cast(RunnableConfig, {"callbacks": [langfuse_handler]})
+                result = workflow.invoke(cast(Shadow_Writing_State, initial_state), config=config)
+            else:
+                from app.state import Shadow_Writing_State
+                from typing import cast
+                result = workflow.invoke(cast(Shadow_Writing_State, initial_state))
             
             # 提取最终结果
             final_chunks = result.get("final_shadow_chunks", [])

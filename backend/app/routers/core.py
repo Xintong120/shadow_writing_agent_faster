@@ -55,7 +55,7 @@ async def process_file(file: UploadFile = File(...)):
         }
     """
     # 验证文件类型
-    if not file.filename.endswith('.txt'):
+    if not file.filename or not file.filename.endswith('.txt'):
         raise HTTPException(
             status_code=400,
             detail="只支持 .txt 文件格式"
@@ -213,8 +213,20 @@ async def search_ted(request: SearchRequest):
             "error_message": None
         }
 
-        # 运行工作流
-        result = workflow.invoke(initial_state)
+        # 获取全局Langfuse处理器
+        from app.main import langfuse_handler
+
+        # 运行工作流（带Langfuse监控）
+        if langfuse_handler:
+            from langchain_core.runnables import RunnableConfig
+            from typing import cast
+            from app.state import Shadow_Writing_State
+            config = cast(RunnableConfig, {"callbacks": [langfuse_handler]})
+            result = workflow.invoke(cast(Shadow_Writing_State, initial_state), config=config)
+        else:
+            from app.state import Shadow_Writing_State
+            from typing import cast
+            result = workflow.invoke(cast(Shadow_Writing_State, initial_state))
 
         # 提取候选列表
         candidates_raw = result.get("ted_candidates", [])
@@ -288,7 +300,7 @@ async def process_batch(request: BatchProcessRequest, background_tasks: Backgrou
         print(f"\n[API] 批量处理 {len(request.urls)} 个URLs")
 
         # 创建任务
-        task_id = task_manager.create_task(request.urls, request.user_id)
+        task_id = task_manager.create_task(request.urls, request.user_id or "")
 
         # 后台异步处理
         background_tasks.add_task(process_urls_batch, task_id, request.urls)

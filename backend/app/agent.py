@@ -6,15 +6,18 @@
 #   - 返回结构化结果
 
 from app.workflows import create_parallel_shadow_writing_workflow
+from app.state import Shadow_Writing_State
+from typing import cast
+from langchain_core.runnables import RunnableConfig
 
 
 # 暴露给main.py的处理函数
 def process_ted_text(
-    text: str, 
+    text: str,
     target_topic: str = "",
-    ted_title: str = None,
-    ted_speaker: str = None,
-    ted_url: str = None
+    ted_title: str | None = None,
+    ted_speaker: str | None = None,
+    ted_url: str | None = None
 ) -> dict:
     """
     处理TED文本的主函数
@@ -47,8 +50,15 @@ def process_ted_text(
         "error_message": None
     }
     
-    # 运行并行工作流
-    result = workflow.invoke(initial_state)
+    # 获取全局Langfuse处理器
+    from app.main import langfuse_handler
+
+    # 运行并行工作流（带Langfuse监控）
+    if langfuse_handler:
+        config = cast(RunnableConfig, {"callbacks": [langfuse_handler]})
+        result = workflow.invoke(cast(Shadow_Writing_State, initial_state), config=config)
+    else:
+        result = workflow.invoke(cast(Shadow_Writing_State, initial_state))
     
     # 提取最终结果
     final = result.get("final_shadow_chunks", [])

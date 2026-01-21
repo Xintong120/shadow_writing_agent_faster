@@ -2,7 +2,7 @@
 # 作用：FastAPI应用入口
 # 功能：应用配置、路由注册、WebSocket端点、中间件配置
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -10,6 +10,51 @@ import json
 import time
 import logging
 from app.config import settings, validate_config
+
+# Prometheus监控指标
+try:
+    from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+    PROMETHEUS_AVAILABLE = True
+
+    # 定义业务指标
+    REQUEST_COUNT = Counter('app_requests_total', 'Total number of requests', ['method', 'endpoint', 'status'])
+    REQUEST_LATENCY = Histogram('app_request_duration_seconds', 'Request duration in seconds', ['method', 'endpoint'])
+    ERROR_COUNT = Counter('app_errors_total', 'Total number of errors', ['method', 'endpoint', 'status'])
+
+    # 系统指标
+    CPU_USAGE = Gauge('app_cpu_usage_percent', 'CPU usage percentage')
+    MEMORY_USAGE = Gauge('app_memory_usage_mb', 'Memory usage in MB')
+    ACTIVE_REQUESTS = Gauge('app_active_requests', 'Number of active requests')
+
+    print("[MONITOR] Prometheus metrics enabled")
+except ImportError:
+    PROMETHEUS_AVAILABLE = False
+    generate_latest = None
+    CONTENT_TYPE_LATEST = None
+    print("[MONITOR] Prometheus client not available, metrics disabled")
+
+# Langfuse初始化
+langfuse_handler = None
+if settings.langfuse_enabled and settings.langfuse_public_key and settings.langfuse_secret_key:
+    try:
+        from langfuse import Langfuse
+        from langfuse.langchain import CallbackHandler
+
+        # 初始化Langfuse客户端
+        langfuse_client = Langfuse(
+            public_key=settings.langfuse_public_key,
+            secret_key=settings.langfuse_secret_key,
+            host=settings.langfuse_base_url
+        )
+
+        # 创建回调处理器
+        langfuse_handler = CallbackHandler()
+        print("[LANGFUSE] Langfuse monitoring enabled")
+    except Exception as e:
+        print(f"[LANGFUSE] Failed to initialize Langfuse: {e}")
+        langfuse_handler = None
+else:
+    print("[LANGFUSE] Langfuse monitoring disabled")
 
 # 配置日志 - 确保应用日志能正确输出，不被uvicorn覆盖
 logging.basicConfig(
@@ -347,6 +392,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 添加Prometheus监控中间件
+if PROMETHEUS_AVAILABLE:
+    @app.middleware("http")
+    async def prometheus_middleware(request: Request, call_next):
+        start_time = time.time()
+        ACTIVE_REQUESTS.inc()
+
+        try:
+            response = await call_next(request)
+            REQUEST_COUNT.labels(
+                method=request.method,
+                endpoint=request.url.path,
+                status=response.status_code
+            ).inc()
+            return response
+        except Exception as e:
+            ERROR_COUNT.labels(
+                method=request.method,
+                endpoint=request.url.path,
+                status=500
+            ).inc()
+            raise
+        finally:
+            ACTIVE_REQUESTS.dec()
+            REQUEST_LATENCY.labels(
+                method=request.method,
+                endpoint=request.url.path
+            ).observe(time.time() - start_time)
+
 # 注册路由（按功能分组）
 app.include_router(core_router)         # 核心业务路由 (/api/v1/...)
 app.include_router(memory_router)       # Memory路由 (/api/memory/...)
@@ -354,6 +428,21 @@ app.include_router(config_router)       # 配置路由 (/api/config/...)
 app.include_router(settings_router)     # 设置路由 (/api/settings/...)
 app.include_router(monitoring_router)   # 监控路由 (/api/monitoring/...)
 app.include_router(monitor_router)      # 异步监控路由 (/api/monitor/...)
+
+
+# Prometheus指标端点
+if PROMETHEUS_AVAILABLE:
+    @app.get("/metrics")
+    async def metrics():
+        """Prometheus指标收集端点"""
+        # 更新系统指标
+        CPU_USAGE.set(psutil.cpu_percent())
+        MEMORY_USAGE.set(psutil.virtual_memory().used / 1024 / 1024)
+
+        return Response(
+            generate_latest(),
+            media_type=CONTENT_TYPE_LATEST
+        )
 
 # 兼容性路由：保留原有路径
 @app.get("/health")

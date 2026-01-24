@@ -460,6 +460,58 @@ def health_check():
 
 # ============ SSE处理 ============
 
+# 预连接SSE端点 - 用于提前建立连接
+@app.get("/api/v1/progress/preconnect")
+async def preconnect_stream():
+    """
+    预连接SSE端点，用于提前建立SSE连接，避免处理时的连接延迟
+
+    返回心跳消息保持连接活跃
+    """
+
+    async def event_generator():
+        # 发送连接确认
+        yield f"data: {json.dumps({'type': 'preconnect_ready', 'timestamp': time.time()})}\n\n"
+
+        # 保持连接活跃，定期发送心跳
+        while True:
+            await asyncio.sleep(30)  # 每30秒发送心跳
+            yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': time.time()})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Last-Event-ID"
+        }
+    )
+
+# SSE埋点监控端点
+@app.post("/api/monitoring/sse-events")
+async def log_sse_event(event_data: dict):
+    """
+    记录SSE事件埋点数据
+
+    用于监控SSE连接状态、性能指标等
+    """
+    try:
+        event_name = event_data.get('event', 'unknown')
+        data = event_data.get('data', {})
+
+        print(f"[SSE埋点] {event_name}: {data}")
+
+        # 这里可以保存到数据库、日志系统或监控平台
+        # 暂时只打印到控制台，便于调试
+
+        return {"status": "logged", "event": event_name}
+
+    except Exception as e:
+        print(f"[SSE埋点错误] {e}")
+        return {"status": "error", "message": str(e)}
+
 # SSE端点 - 替换WebSocket，使用流式响应推送进度消息
 @app.get("/api/v1/progress/{task_id}")
 async def progress_stream(task_id: str, last_event_id: str | None = None):
@@ -487,57 +539,121 @@ async def progress_stream(task_id: str, last_event_id: str | None = None):
         data: {"type": "started", "timestamp": 1640995200.123}
     """
 
+    # 详细的连接诊断日志
+    request_start_time = time.time()
+    print("\n[SSE诊断] =========================================")
+    print(f"[SSE诊断] 新SSE连接请求 - 任务ID: {task_id}")
+    print(f"[SSE诊断] 请求开始时间: {time.strftime('%H:%M:%S', time.localtime(request_start_time))}")
+    print(f"[SSE诊断] 请求时间戳: {request_start_time}")
+    print(f"[SSE诊断] last_event_id参数: {last_event_id}")
+    print(f"[SSE诊断] 请求URL: /api/v1/progress/{task_id}")
+    print(f"[SSE诊断] 当前活跃任务数量: {sse_manager.get_active_tasks_count()}")
+    print(f"[SSE诊断] 当前任务消息数量: {sse_manager.get_task_message_count(task_id)}")
+
+    # 检查任务是否存在于task_manager中
+    task_info = task_manager.get_task(task_id)
+    if task_info:
+        print(f"[SSE诊断] 任务状态: {task_info.status.value}")
+        print(f"[SSE诊断] 任务URL数量: {task_info.total}")
+        print(f"[SSE诊断] 已处理数量: {task_info.current}")
+        print(f"[SSE诊断] 当前URL: {task_info.current_url}")
+    else:
+        print(f"[SSE诊断] 警告: 任务 {task_id} 在task_manager中不存在")
+
     async def generate():
         """生成SSE消息流"""
-        try:
-            # 获取缓存的消息，支持断点续传
-            messages = await sse_manager.get_messages(task_id, last_event_id)
+        stream_start_time = time.time()
+        print(f"[SSE诊断] 流生成器启动 - 耗时: {stream_start_time - request_start_time:.3f}秒")
 
-            print(f"[SSE] [{task_id}] 发送 {len(messages)} 条缓存消息")
+        try:
+            # ============ 立即发送连接确认消息，让前端知道连接已建立 ============
+            # 简化格式，直接使用data:前缀，符合SSE规范
+            connected_data = {
+                "id": f"{task_id}_connected_{int(time.time() * 1000)}",
+                "type": "connected",
+                "task_id": task_id,
+                "message": f"Connected to progress stream for task {task_id}",
+                "timestamp": time.time()
+            }
+            yield f"data: {json.dumps(connected_data)}\n\n"
+            print(f"[SSE] 立即发送连接确认消息 - 简化格式")
+
+            # 让事件循环处理，确保消息发送
+            await asyncio.sleep(0)
+
+            # 获取缓存的消息，支持断点续传
+            get_messages_start = time.time()
+            messages = await sse_manager.get_messages(task_id, last_event_id)
+            get_messages_duration = time.time() - get_messages_start
+
+            print(f"[SSE诊断] 获取缓存消息完成 - 数量: {len(messages)}, 耗时: {get_messages_duration:.3f}秒")
+
+            if messages:
+                print(f"[SSE诊断] 缓存消息详情:")
+                for i, msg in enumerate(messages[:5]):  # 只显示前5条
+                    print(f"  [{i+1}] 类型: {msg.get('type')}, ID: {msg.get('id')}, 时间戳: {msg.get('timestamp')}")
 
             # 发送缓存的消息
+            send_cached_start = time.time()
+            cached_count = 0
             for message in messages:
                 event_data = f"id: {message['id']}\ndata: {json.dumps(message)}\n\n"
                 yield event_data
+                cached_count += 1
 
-            # 如果没有断点续传，发送连接确认消息
-            if not last_event_id:
-                connected_message = {
-                    "id": f"{task_id}_connected_{int(time.time() * 1000)}",
-                    "type": "connected",
-                    "task_id": task_id,
-                    "message": f"Connected to progress stream for task {task_id}",
-                    "timestamp": time.time()
-                }
-                event_data = f"id: {connected_message['id']}\ndata: {json.dumps(connected_message)}\n\n"
-                yield event_data
+            send_cached_duration = time.time() - send_cached_start
+            print(f"[SSE诊断] 发送缓存消息完成 - 发送数量: {cached_count}, 耗时: {send_cached_duration:.3f}秒")
 
             # 持续监听新消息（保持连接活跃）
             last_sent_id = messages[-1]['id'] if messages else (last_event_id or "0")
+            message_check_count = 0
+            new_messages_sent = 0
+
+            print(f"[SSE诊断] 开始监听新消息 - 初始last_sent_id: {last_sent_id}")
 
             while True:
                 try:
+                    message_check_count += 1
+
                     # 检查是否有新消息
+                    check_start = time.time()
                     latest_message = await sse_manager.get_latest_message(task_id)
+                    check_duration = time.time() - check_start
+
                     if latest_message and latest_message['id'] != last_sent_id:
                         # 发送新消息
+                        send_msg_start = time.time()
                         event_data = f"id: {latest_message['id']}\ndata: {json.dumps(latest_message)}\n\n"
                         yield event_data
+                        send_duration = time.time() - send_msg_start
+
+                        new_messages_sent += 1
                         last_sent_id = latest_message['id']
-                        print(f"[SSE] [{task_id}] 发送新消息: {latest_message['type']}")
+
+                        print(f"[SSE诊断] 发送新消息 #{new_messages_sent} - 类型: {latest_message.get('type')}, ID: {latest_message['id']}, 检查耗时: {check_duration:.3f}秒, 发送耗时: {send_duration:.3f}秒")
 
                         # 如果是完成消息，结束流
                         if latest_message.get('type') == 'completed':
+                            total_stream_duration = time.time() - stream_start_time
+                            print(f"[SSE诊断] 检测到完成消息，结束流 - 总流持续时间: {total_stream_duration:.3f}秒")
+                            print(f"[SSE诊断] 消息检查次数: {message_check_count}, 新消息数量: {new_messages_sent}")
                             break
+
+                    # 每100次检查输出一次状态
+                    if message_check_count % 100 == 0:
+                        elapsed = time.time() - stream_start_time
+                        print(f"[SSE诊断] 状态更新 - 检查次数: {message_check_count}, 新消息: {new_messages_sent}, 持续时间: {elapsed:.1f}秒")
 
                     await asyncio.sleep(0.1)  # 短暂延迟，避免CPU占用过高
 
                 except Exception as e:
-                    print(f"[SSE] [{task_id}] 流式响应错误: {e}")
+                    error_time = time.time() - stream_start_time
+                    print(f"[SSE诊断] 流式响应错误 - 发生时间: {error_time:.3f}秒, 错误: {e}")
                     break
 
         except Exception as e:
-            print(f"[SSE] [{task_id}] SSE端点错误: {e}")
+            error_time = time.time() - stream_start_time
+            print(f"[SSE诊断] SSE端点错误 - 发生时间: {error_time:.3f}秒, 错误: {e}")
             error_message = {
                 "id": f"{task_id}_error_{int(time.time() * 1000)}",
                 "type": "error",
@@ -547,11 +663,14 @@ async def progress_stream(task_id: str, last_event_id: str | None = None):
             yield f"id: {error_message['id']}\ndata: {json.dumps(error_message)}\n\n"
 
     # 返回SSE流式响应
+    print(f"[SSE诊断] 返回StreamingResponse - 请求总耗时: {time.time() - request_start_time:.3f}秒")
+    print(f"[SSE诊断] =========================================")
+
     return StreamingResponse(
         generate(),
-        media_type="text/event-stream",
+        media_type="text/event-stream",  # 保持SSE媒体类型，因为我们发送的是SSE格式数据
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache",  # 仅保留必要的缓存控制
             "Connection": "keep-alive",
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Headers": "Last-Event-ID"

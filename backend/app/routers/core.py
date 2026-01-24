@@ -18,12 +18,132 @@ import time
 import os
 import tempfile
 import asyncio
+import uuid
 
 router = APIRouter(prefix="/api/v1", tags=["core"])
 
 # ============ 核心业务路由 ============
 
-# 1. 健康检查接口（移到v1，但保留原有路径兼容性）
+# 后台流式处理函数
+async def process_stream_in_background(transcript: str, ted_data, task_id: str):
+    """后台流式处理函数，避免阻塞HTTP请求"""
+    try:
+        # 推送开始消息
+        from app.sse_manager import sse_manager
+        await sse_manager.add_message(task_id, {
+            "type": "processing_started",
+            "message": "开始处理文件",
+            "timestamp": time.time()
+        })
+
+        # 消费流式数据并推送SSE
+        from app.agent import process_ted_text_stream
+        results = []
+        async for chunk_data in process_ted_text_stream(
+            transcript, "", ted_data.title, ted_data.speaker, ted_data.url, task_id
+        ):
+            results.append(chunk_data["result"])
+
+        # 推送分块和并行处理完成消息
+        await sse_manager.add_message(task_id, {
+            "type": "chunking_completed",
+            "total_chunks": len(results),
+            "message": f"语义分块和并行处理完成，共生成 {len(results)} 个结果",
+            "timestamp": time.time()
+        })
+
+        # 推送最终完成消息
+        await sse_manager.add_message(task_id, {
+            "type": "processing_completed",
+            "results": results,
+            "result_count": len(results),
+            "timestamp": time.time()
+        })
+
+    except Exception as e:
+        # 推送错误消息
+        from app.sse_manager import sse_manager
+        await sse_manager.add_message(task_id, {
+            "type": "error",
+            "message": str(e),
+            "timestamp": time.time()
+        })
+
+
+# 1. 流式文件处理接口（推荐新接口）
+@router.post("/process-file-stream", response_model=dict)
+async def process_file_stream(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    """
+    流式处理TED文件（推荐新接口）
+
+    支持实时流式输出每个chunk的完成结果
+    """
+    # 验证文件类型
+    if not file.filename or not file.filename.endswith('.txt'):
+        raise HTTPException(
+            status_code=400,
+            detail="只支持 .txt 文件格式"
+        )
+
+    try:
+        # 1. 创建临时文件保存上传内容
+        with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.txt') as temp_file:
+            content = await file.read()
+            temp_file.write(content)
+            temp_file_path = temp_file.name
+
+        # 2. 调用 parse_ted_file() 解析文件
+        ted_data = parse_ted_file(temp_file_path)
+
+        # 3. 删除临时文件
+        os.unlink(temp_file_path)
+
+        # 4. 验证解析结果
+        if not ted_data:
+            raise HTTPException(
+                status_code=400,
+                detail="文件解析失败：请检查文件格式是否正确"
+            )
+
+        # 5. 提取 transcript
+        transcript = ted_data.transcript
+
+        if not transcript or len(transcript.strip()) < 50:
+            raise HTTPException(
+                status_code=400,
+                detail="Transcript 内容太短，至少需要50个字符"
+            )
+
+        # 6. 创建任务ID
+        task_id = str(uuid.uuid4())
+
+        # 7. 启动后台流式处理任务（不阻塞HTTP响应）
+        background_tasks.add_task(process_stream_in_background, transcript, ted_data, task_id)
+
+        # 8. 立即返回任务ID，让前端通过SSE监听进度
+        return {
+            "success": True,
+            "task_id": task_id,
+            "ted_info": {
+                "title": ted_data.title,
+                "speaker": ted_data.speaker,
+                "url": ted_data.url,
+                "duration": ted_data.duration,
+                "views": ted_data.views,
+                "transcript_length": len(transcript)
+            },
+            "message": "Processing started. Connect to /api/v1/progress/{task_id} for real-time updates."
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"启动流式处理时发生错误: {str(e)}"
+        )
+
+# 2. 健康检查接口（移到v1，但保留原有路径兼容性）
 @router.get("/health")
 def health_check():
     """健康检查"""
@@ -222,11 +342,11 @@ async def search_ted(request: SearchRequest):
             from typing import cast
             from app.state import Shadow_Writing_State
             config = cast(RunnableConfig, {"callbacks": [langfuse_handler]})
-            result = workflow.invoke(cast(Shadow_Writing_State, initial_state), config=config)
+            result = await workflow.ainvoke(cast(Shadow_Writing_State, initial_state), config=config)
         else:
             from app.state import Shadow_Writing_State
             from typing import cast
-            result = workflow.invoke(cast(Shadow_Writing_State, initial_state))
+            result = await workflow.ainvoke(cast(Shadow_Writing_State, initial_state))
 
         # 提取候选列表
         candidates_raw = result.get("ted_candidates", [])

@@ -5,6 +5,7 @@
 #   - 使用workflows.py中定义的工作流
 #   - 返回结构化结果
 
+import asyncio
 from app.workflows import create_parallel_shadow_writing_workflow
 from app.state import Shadow_Writing_State
 from typing import cast
@@ -80,3 +81,126 @@ def process_ted_text(
         "results": results,
         "result_count": len(results)
     }
+
+
+async def process_ted_text_stream(
+    text: str,
+    target_topic: str = "",
+    ted_title: str | None = None,
+    ted_speaker: str | None = None,
+    ted_url: str | None = None,
+    task_id: str | None = None
+):
+    """
+    异步流式处理TED文本
+
+    Args:
+        text: TED演讲文本
+        target_topic: 目标话题（可选）
+        ted_title: TED演讲标题（可选）
+        ted_speaker: TED演讲者（可选）
+        ted_url: TED演讲URL（可选）
+        task_id: 任务ID（用于SSE推送）
+
+    Yields:
+        流式输出每个完成的chunk结果
+    """
+
+    workflow = create_parallel_shadow_writing_workflow()
+
+    initial_state = {
+        "text": text,
+        "target_topic": target_topic,
+        "ted_title": ted_title,
+        "ted_speaker": ted_speaker,
+        "ted_url": ted_url,
+        "task_id": task_id,  # 传递task_id给子图
+        "semantic_chunks": [],
+        "final_shadow_chunks": [],
+        "current_node": "",
+        "error_message": None
+    }
+
+    # 获取全局Langfuse处理器
+    from app.main import langfuse_handler
+
+    # 使用astream()进行异步流式执行
+    config = cast(RunnableConfig, {"callbacks": [langfuse_handler]}) if langfuse_handler else None
+
+    print(f"[STREAM] Starting astream for task_id: {task_id}")
+    print(f"[STREAM] Initial state keys: {list(initial_state.keys())}")
+    print(f"[STREAM] Semantic chunks count: {len(initial_state.get('semantic_chunks', []))}")
+
+    try:
+        async for event in workflow.astream(
+            cast(Shadow_Writing_State, initial_state),
+            config=config,
+            stream_mode=["updates", "custom"],  # 同时监听状态更新和自定义数据
+            subgraphs=True  # 关键：包含子图输出，这样finalize_agent中的流式数据才能传递出来
+        ):
+            print(f"[STREAM] Received event: {event}")
+            print(f"[STREAM] Event type: {type(event)}, length: {len(event) if isinstance(event, tuple) else 'Not tuple'}")
+
+            # 处理astream的实际返回值格式
+            metadata = None  # 初始化metadata
+            if isinstance(event, tuple):
+                if len(event) == 2:
+                    mode, data = event
+                    print(f"[STREAM] Unpacked as (mode, data): mode={mode}, data_type={type(data)}")
+                elif len(event) == 3:
+                    mode, data, metadata = event
+                    print(f"[STREAM] Unpacked as (mode, data, metadata): mode={mode}, data_type={type(data)}")
+                else:
+                    print(f"[STREAM] Unexpected tuple length: {len(event)}, full event: {event}")
+                    continue
+            else:
+                # 单值模式
+                data = event
+                mode = "unknown"
+                print(f"[STREAM] Single value mode, data_type={type(data)}")
+
+            if data == "custom" and metadata is not None:  # 自定义流式数据 (修正：检查data而不是mode，确保metadata存在)
+                chunk_data = metadata  # 修正：使用metadata而不是data
+                print(f"[STREAM] Custom data keys: {list(chunk_data.keys()) if isinstance(chunk_data, dict) else 'Not dict'}")
+
+                if chunk_data.get("type") == "chunk_completed":
+                    print(f"[STREAM] Processing chunk_completed for chunk_id: {chunk_data.get('chunk_id')}")
+
+                    # 转发给SSE管理器
+                    if task_id:
+                        print(f"[SSE] About to call sse_manager.add_message for task_id: {task_id}")
+                        try:
+                            from app.sse_manager import sse_manager
+                            # 序列化Ted_Shadows对象为字典
+                            result_data = chunk_data["result"]
+                            if hasattr(result_data, 'model_dump'):
+                                serialized_result = result_data.model_dump()
+                            elif hasattr(result_data, 'dict'):
+                                serialized_result = result_data.dict()
+                            else:
+                                serialized_result = str(result_data)
+
+                            await sse_manager.add_message(task_id, {
+                                "type": "chunk_completed",
+                                "chunk_id": chunk_data["chunk_id"],
+                                "result": serialized_result,
+                                "timestamp": chunk_data["timestamp"]
+                            })
+                            print(f"[SSE] Message sent successfully for chunk {chunk_data['chunk_id']}")
+                        except Exception as e:
+                            print(f"[SSE] Error sending message: {e}")
+                            import traceback
+                            traceback.print_exc()
+
+                    yield chunk_data  # 返回给调用方
+
+            elif mode == "updates":  # 状态更新
+                print(f"[STREAM] State update received")
+                # 可以处理其他状态更新...
+                pass
+
+    except Exception as e:
+        print(f"[STREAM] Error in astream: {e}")
+        import traceback
+        traceback.print_exc()
+        raise

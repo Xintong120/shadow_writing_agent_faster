@@ -269,6 +269,7 @@ def create_parallel_shadow_writing_workflow():
         为每个语义块创建独立的处理流水线
 
         使用Send API动态分发，LangGraph会自动并行处理
+        只负责数据分发，不推送SSE消息，避免异步事件循环冲突
         """
         semantic_chunks = state.get("semantic_chunks", [])
         task_id = state.get("task_id")
@@ -277,21 +278,12 @@ def create_parallel_shadow_writing_workflow():
         print(f"[PARALLEL WORKFLOW] task_id: {task_id}")
         print(f"[PARALLEL WORKFLOW] state keys: {list(state.keys())}")
 
-        # 推送并行处理开始消息
-        if task_id:
-            import asyncio
-            from app.sse_manager import sse_manager
-            asyncio.create_task(
-                sse_manager.add_message(task_id, {
-                    "type": "chunks_processing_started",
-                    "total_chunks": len(semantic_chunks),
-                    "message": f"开始并行处理 {len(semantic_chunks)} 个语义块"
-                })
-            )
-            print(f"[PARALLEL WORKFLOW] 推送并行处理开始消息到task_id: {task_id}")
+        # 【重要】不再在工作流中推送SSE消息，避免异步事件循环问题
+        # 消息推送交给process_stream_in_background函数处理
 
         # 为每个chunk创建一个Send指令
         # 【重要】ChunkProcessState与主State共享final_shadow_chunks字段，使用operator.add自动合并
+        # 【新增】确保task_id传递给每个chunk，用于finalize_agent中的流式输出
         total_chunks = len(semantic_chunks)
         return [
             Send(
@@ -299,7 +291,7 @@ def create_parallel_shadow_writing_workflow():
                 {
                     "chunk_text": chunk,
                     "chunk_id": i,
-                    "task_id": task_id,  # 传递task_id用于进度推送
+                    "task_id": task_id,  # 【关键】传递task_id给finalize_agent用于流式输出
                     "total_chunks": total_chunks,  # 传递总数用于进度计算
                     # 初始化ChunkProcessState字段
                     "raw_shadow": None,

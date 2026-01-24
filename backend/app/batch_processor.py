@@ -7,6 +7,9 @@ from app.sse_manager import sse_manager
 from app.tools.ted_transcript_tool import extract_ted_transcript
 from app.workflows import create_parallel_shadow_writing_workflow
 from app.enums import TaskStatus, MessageType, ProcessingStep
+from langchain_core.runnables import RunnableConfig
+from typing import cast
+from app.state import Shadow_Writing_State
 
 
 async def process_urls_batch(task_id: str, urls: List[str]):
@@ -116,34 +119,65 @@ async def process_urls_batch(task_id: str, urls: List[str]):
                 "error_message": None
             }
             
-            # 运行并行工作流（带Langfuse监控）
-            print("   启动并行Shadow Writing工作流...")
+            # 运行并行工作流（流式版本，带Langfuse监控）
+            print("   启动并行Shadow Writing工作流（流式）...")
             from app.main import langfuse_handler
-            if langfuse_handler:
-                from langchain_core.runnables import RunnableConfig
-                from typing import cast
-                from app.state import Shadow_Writing_State
-                config = cast(RunnableConfig, {"callbacks": [langfuse_handler]})
-                result = workflow.invoke(cast(Shadow_Writing_State, initial_state), config=config)
-            else:
-                from app.state import Shadow_Writing_State
-                from typing import cast
-                result = workflow.invoke(cast(Shadow_Writing_State, initial_state))
-            
-            # 提取最终结果
-            final_chunks = result.get("final_shadow_chunks", [])
-            
-            # 处理返回值：可能是字典列表或对象列表
+
+            # 使用astream监听chunk完成事件
+            config = cast(RunnableConfig, {"callbacks": [langfuse_handler]}) if langfuse_handler else None
+
             processed_results = []
-            for item in final_chunks:
-                if isinstance(item, dict):
-                    processed_results.append(item)
-                elif hasattr(item, 'dict'):
-                    processed_results.append(item.dict())
-                elif hasattr(item, 'model_dump'):
-                    processed_results.append(item.model_dump())
-                else:
-                    processed_results.append(str(item))
+            async for event in workflow.astream(
+                cast(Shadow_Writing_State, initial_state),
+                config=config,
+                stream_mode=["updates", "custom"],
+                subgraphs=True
+            ):
+                # 处理astream事件
+                if isinstance(event, tuple) and len(event) == 3:
+                    namespace, mode, data = event
+                    if mode == "custom" and data.get("type") == "chunk_completed":
+                        # 每个chunk完成时立即推送SSE消息
+                        chunk_data = data
+
+                        # 序列化Ted_Shadows对象
+                        result_obj = chunk_data["result"]
+                        if hasattr(result_obj, 'model_dump'):
+                            serialized_result = result_obj.model_dump()
+                        elif hasattr(result_obj, 'dict'):
+                            serialized_result = result_obj.dict()
+                        else:
+                            serialized_result = str(result_obj)
+
+                        processed_results.append(serialized_result)
+
+                        # 实时推送chunk结果到前端
+                        await sse_manager.add_message(
+                            task_id,
+                            {
+                                "type": "chunk_completed",
+                                "chunk_id": chunk_data["chunk_id"],
+                                "result": serialized_result,
+                                "timestamp": chunk_data["timestamp"]
+                            }
+                        )
+                elif isinstance(event, dict) and event.get("type") == "chunk_completed":
+                    # 处理单值模式
+                    result_obj = event["result"]
+                    if hasattr(result_obj, 'model_dump'):
+                        serialized_result = result_obj.model_dump()
+                    elif hasattr(result_obj, 'dict'):
+                        serialized_result = result_obj.dict()
+                    else:
+                        serialized_result = str(result_obj)
+
+                    processed_results.append(serialized_result)
+                    await sse_manager.add_message(task_id, {
+                        "type": "chunk_completed",
+                        "chunk_id": event["chunk_id"],
+                        "result": serialized_result,
+                        "timestamp": event["timestamp"]
+                    })
             
             url_end_time = time.time()
             url_duration = url_end_time - url_start_time

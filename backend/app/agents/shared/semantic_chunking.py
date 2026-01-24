@@ -48,38 +48,11 @@ class Semantic_Chunking_Agent:
         print("\n开始智能语义分块处理...")
         print(f"原始文本长度: {len(transcript)} 字符")
 
-        # 推送分块开始消息
-        if task_id:
-            import asyncio
-            from app.sse_manager import sse_manager
-            asyncio.create_task(
-                sse_manager.add_message(task_id, {
-                    "type": "chunking_started",
-                    "message": f"开始语义分块处理，文本长度: {len(transcript)} 字符",
-                    "text_length": len(transcript)
-                })
-            )
-            print(f"[SEMANTIC CHUNKING] 推送分块开始消息到task_id: {task_id}")
-
         chunks = self.split_into_chunks(transcript)
 
         print(f"分块完成: {len(chunks)} 个语义块")
         for i, chunk in enumerate(chunks, 1):
             print(f"  语义块 {i}: {len(chunk)} 字符")
-
-        # 推送分块完成消息
-        if task_id:
-            import asyncio
-            from app.sse_manager import sse_manager
-            asyncio.create_task(
-                sse_manager.add_message(task_id, {
-                    "type": "chunking_completed",
-                    "total_chunks": len(chunks),
-                    "message": f"语义分块完成，共生成 {len(chunks)} 个语义块",
-                    "chunk_sizes": [len(chunk) for chunk in chunks]
-                })
-            )
-            print(f"[SEMANTIC CHUNKING] 推送分块完成消息到task_id: {task_id}, 块数: {len(chunks)}")
 
         return chunks
     

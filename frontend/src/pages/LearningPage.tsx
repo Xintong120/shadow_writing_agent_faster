@@ -5,25 +5,15 @@ import { useState, useEffect, useRef } from "react";
 import { ArrowLeft, BookOpen, Sparkles, Target } from "lucide-react";
 import LearningCard from "@/components/LearningCard";
 import { LearningItem } from "@/types/learning";
-
-// SSE消息类型
-interface ChunkCompletedMessage {
-  type: "chunk_completed";
-  chunk_id: number;
-  result: {
-    original: string;
-    imitation: string;
-    map: Record<string, string[]>;
-    paragraph: string;
-    quality_score: number;
-  };
-  timestamp: number;
-}
+import { sseService } from "@/services/progress";
+import type { BatchProgressMessage } from "@/types";
 
 interface LearningPageProps {
   taskId?: string | null;
   tedTitle?: string;
   tedSpeaker?: string;
+  lastEventId?: string | null; // 新增：从ProcessingPage传递的最后事件ID
+  receivedChunks?: any[]; // 新增：从ProcessingPage传递的已接收chunks
   onBack?: () => void;
 }
 
@@ -31,24 +21,27 @@ const LearningPage = ({
   taskId,
   tedTitle = "TED Learning Session",
   tedSpeaker = "Unknown Speaker",
+  lastEventId,
+  receivedChunks = [],
 }: LearningPageProps) => {
   const [learningItems, setLearningItems] = useState<LearningItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [connectionStatus, setConnectionStatus] = useState<
     "connecting" | "connected" | "disconnected"
   >("connecting");
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const hasSetInitialItems = useRef(false);
 
   // 将后端数据转换为前端LearningItem格式
   const convertToLearningItem = (
-    chunkData: ChunkCompletedMessage["result"],
+    chunkData: any,
     chunkId: number,
   ): LearningItem => {
     const { original, imitation, map } = chunkData;
 
     // 将map字典转换为mapping数组
-    const mapping = Object.entries(map).flatMap(([from, toList]) =>
-      toList.map((to) => ({ from, to })),
+    const mapping = Object.entries(map || {}).flatMap(
+      ([from, toList]: [string, any]) =>
+        Array.isArray(toList) ? toList.map((to: string) => ({ from, to })) : [],
     );
 
     return {
@@ -59,70 +52,142 @@ const LearningPage = ({
     };
   };
 
-  // 设置SSE监听
+  // 设置SSE监听 - 使用SSEService进行断点续传
   useEffect(() => {
     if (!taskId) {
       setIsLoading(false);
       return;
     }
 
-    const setupSSE = () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-      }
+    console.log("[LearningPage] 组件初始化");
+    console.log("[LearningPage] taskId:", taskId);
+    console.log("[LearningPage] lastEventId:", lastEventId);
+    console.log("[LearningPage] receivedChunks 长度:", receivedChunks.length);
+    console.log(
+      "[LearningPage] receivedChunks 详情:",
+      receivedChunks.map((chunk, index) => ({
+        index,
+        chunk_id: chunk.chunk_id,
+        type: chunk.type,
+        hasResult: !!chunk.result,
+        resultLength: chunk.result ? chunk.result.length : 0,
+        timestamp: chunk.timestamp,
+      })),
+    );
 
-      const eventSource = new EventSource(
-        `http://localhost:8000/api/v1/progress/${taskId}`,
+    // 首先将已接收的chunks转换为learningItems（只设置一次）
+    if (!hasSetInitialItems.current && receivedChunks.length > 0) {
+      const initialItems = receivedChunks.map((chunk) =>
+        convertToLearningItem(chunk.result, chunk.chunk_id || 0),
       );
-      eventSourceRef.current = eventSource;
+      setLearningItems(initialItems);
+      hasSetInitialItems.current = true;
+      console.log(
+        "[LearningPage] 初始化时设置learningItems数量:",
+        initialItems.length,
+        "来自ProcessingPage的chunks",
+      );
+      console.log(
+        "[LearningPage] 初始learningItems详情:",
+        initialItems.map((item, index) => ({
+          index,
+          id: item.id,
+          hasOriginal: !!item.original,
+          hasMimic: !!item.mimic,
+          mappingCount: item.mapping?.length || 0,
+        })),
+      );
+    }
 
-      eventSource.onopen = () => {
-        console.log("[SSE] Learning page connected");
+    // SSE回调函数
+    const sseCallbacks = {
+      onConnected: () => {
+        console.log("[LearningPage] SSE connected");
         setConnectionStatus("connected");
         setIsLoading(false);
-      };
+      },
 
-      eventSource.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data) as ChunkCompletedMessage;
+      onChunkCompleted: (data: BatchProgressMessage) => {
+        const chunk_id = data.chunk_id;
+        const original_timestamp = data.timestamp;
+        const receive_time = Date.now();
 
-          if (data.type === "chunk_completed") {
-            console.log("[SSE] Received chunk:", data.chunk_id);
+        console.log("[LearningPage] Received chunk:", chunk_id);
 
-            const learningItem = convertToLearningItem(
-              data.result,
-              data.chunk_id,
-            );
-            setLearningItems((prev) => [...prev, learningItem]);
+        // 增强调试日志 - 记录learningItems更新的详细时间信息
+        if (original_timestamp) {
+          // 处理时间戳类型 - 后端可能发送秒或毫秒
+          let original_date: Date;
+          if (typeof original_timestamp === "number") {
+            if (original_timestamp > 10000000000) {
+              // 已经是毫秒
+              original_date = new Date(original_timestamp);
+            } else {
+              // 是秒，需要转换为毫秒
+              original_date = new Date(original_timestamp * 1000);
+            }
+          } else {
+            // 字符串时间戳
+            original_date = new Date(original_timestamp);
           }
-        } catch (error) {
-          console.error("[SSE] Parse error:", error);
-        }
-      };
 
-      eventSource.onerror = () => {
-        console.error("[SSE] Connection error");
+          const delay_from_completion =
+            (receive_time - original_date.getTime()) / 1000; // 转换为秒
+
+          console.log(
+            `[CHUNK_TRACKING] LearningPage处理Chunk ${chunk_id} 详情:`,
+          );
+          console.log(
+            `  [CHUNK_TRACKING] 后端原始完成时间: ${original_date.toLocaleTimeString()}`,
+          );
+          console.log(
+            `  [CHUNK_TRACKING] LearningPage接收时间: ${new Date(receive_time).toLocaleTimeString()}`,
+          );
+          console.log(
+            `  [CHUNK_TRACKING] 从chunk完成到LearningPage接收总延迟: ${delay_from_completion.toFixed(6)}秒`,
+          );
+          console.log(
+            `  [CHUNK_TRACKING] 当前learningItems数量: ${learningItems.length} -> ${learningItems.length + 1}`,
+          );
+        }
+
+        const learningItem = convertToLearningItem(
+          data.result,
+          data.chunk_id || 0,
+        );
+        setLearningItems((prev) => [...prev, learningItem]);
+      },
+
+      onCompleted: (data: BatchProgressMessage) => {
+        console.log("[LearningPage] Processing completed");
+        console.log(
+          "[LearningPage] 总共接收到的chunks数量:",
+          learningItems.length,
+        );
+        setConnectionStatus("connected"); // 保持连接状态显示
+      },
+
+      onError: (errorMsg: string) => {
+        console.error("[LearningPage] SSE error:", errorMsg);
         setConnectionStatus("disconnected");
         setIsLoading(false);
+      },
 
-        // 自动重连
-        setTimeout(() => {
-          if (eventSource.readyState === EventSource.CLOSED) {
-            setupSSE();
-          }
-        }, 3000);
-      };
+      onClose: () => {
+        console.log("[LearningPage] SSE connection closed");
+        setConnectionStatus("disconnected");
+      },
     };
 
-    setupSSE();
+    // 连接SSE，使用断点续传
+    sseService.connect(taskId, sseCallbacks, lastEventId);
 
+    // 清理函数
     return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
-      }
+      console.log("[LearningPage] Disconnecting SSE");
+      sseService.disconnect();
     };
-  }, [taskId]);
+  }, [taskId, lastEventId, receivedChunks]);
 
   // 如果没有任务ID，显示错误状态
   if (!taskId) {

@@ -213,6 +213,7 @@ export interface BatchProgressMessage {
   text_length?: number; // 文本长度
   total_chunks?: number; // 总语义块数
   current_chunk?: number; // 当前语义块编号
+  chunk_id?: number; // 当前chunk ID
   stage?: string; // 处理阶段：'shadow_writing' | 'validation' | 'quality' | 'completed'
   chunk_sizes?: number[]; // 各语义块大小
 

@@ -1,7 +1,7 @@
 // frontend/src/pages/ProcessingPage.tsx
 // 处理中页面 - 显示实时进度条和处理状态（通过WebSocket连接后端）
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { sseService, sseProgressManager } from "@/services/progress";
 import { api } from "@/services/api";
@@ -10,7 +10,7 @@ import type { BatchProgressMessage } from "@/types";
 interface ProcessingPageProps {
   taskId?: string | null;
   onFinish?: () => void;
-  onFirstChunkCompleted?: (taskId: string) => void; // 新增：第一个chunk完成时的回调
+  onFirstChunkCompleted?: (taskId: string, receivedChunks: any[]) => void; // 新增：第一个chunk完成时的回调，传递已接收的chunks
 }
 
 let renderCount = 0;
@@ -40,6 +40,9 @@ const ProcessingPage = ({
   const [sseError, setSseError] = useState<string | null>(null);
   const [hasTriggeredFirstChunkJump, setHasTriggeredFirstChunkJump] =
     useState(false);
+  const hasTriggeredRef = useRef(false);
+  const [receivedChunks, setReceivedChunks] = useState<any[]>([]);
+  const receivedChunksRef = useRef<any[]>([]);
 
   // 预连接SSE - 页面加载时执行
   useEffect(() => {
@@ -165,17 +168,42 @@ const ProcessingPage = ({
       // 新增：监听第一个chunk完成消息
       onChunkCompleted: (data: BatchProgressMessage) => {
         console.log("[ProcessingPage] 收到chunk完成消息:", data);
+        console.log(
+          "[ProcessingPage] 当前receivedChunks长度:",
+          receivedChunks.length,
+        );
+
+        // 使用ref确保同步更新
+        receivedChunksRef.current = [...receivedChunksRef.current, data];
+        setReceivedChunks(receivedChunksRef.current);
+
+        console.log("[ProcessingPage] 新增chunk详情:", {
+          chunk_id: data.chunk_id,
+          type: data.type,
+          hasResult: !!data.result,
+          timestamp: data.timestamp,
+        });
 
         // 只在第一次收到chunk完成消息时触发跳转
-        if (!hasTriggeredFirstChunkJump && taskId && onFirstChunkCompleted) {
+        if (!hasTriggeredRef.current && taskId && onFirstChunkCompleted) {
           console.log("[ProcessingPage] 触发第一次chunk完成跳转");
+          console.log(
+            "[ProcessingPage] 传递的chunks数量:",
+            receivedChunksRef.current.length,
+          );
+          console.log(
+            "[ProcessingPage] 最终传递的chunks数组:",
+            receivedChunksRef.current,
+          );
+          hasTriggeredRef.current = true;
           setHasTriggeredFirstChunkJump(true);
           addLog("第一个学习卡片已生成，开始学习模式！");
           setCurrentStep("跳转到学习页面...");
 
           // 延迟一点时间让用户看到消息，然后跳转
           setTimeout(() => {
-            onFirstChunkCompleted(taskId);
+            console.log("[ProcessingPage] 执行跳转，调用onFirstChunkCompleted");
+            onFirstChunkCompleted(taskId, receivedChunksRef.current); // 传递完整的ref数组
           }, 1500);
         }
       },

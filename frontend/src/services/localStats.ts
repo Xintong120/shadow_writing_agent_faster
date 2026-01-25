@@ -163,7 +163,7 @@ export const getCurrentGoalProgress = async (userId: string, period: 'daily' | '
     const now = new Date()
 
     let startDate: Date
-    let endDate: Date = new Date(now)
+    const endDate: Date = new Date(now)
 
     switch (period) {
       case 'daily':

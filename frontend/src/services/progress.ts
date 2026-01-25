@@ -228,11 +228,72 @@ export class SSEService {
         console.log(`[SSE诊断] event.type: ${event.type}`);
         console.log(`[SSE诊断] event.origin: ${event.origin}`);
 
+        // 增强调试日志 - 验证chunk接收完整性
+        try {
+          const rawData = JSON.parse(event.data);
+          console.log(`[SSE诊断] 消息类型: ${rawData.type}, ID: ${rawData.id}`);
+          if (rawData.type === "chunk_completed") {
+            console.log(`[CHUNK_RECEIVE] 接收到chunk_completed消息:`);
+            console.log(`  [CHUNK_RECEIVE] chunk_id: ${rawData.chunk_id}`);
+            console.log(`  [CHUNK_RECEIVE] hasResult: ${!!rawData.result}`);
+            console.log(
+              `  [CHUNK_RECEIVE] resultLength: ${rawData.result ? JSON.stringify(rawData.result).length : 0}`,
+            );
+            console.log(`  [CHUNK_RECEIVE] timestamp: ${rawData.timestamp}`);
+            console.log(`  [CHUNK_RECEIVE] 消息序列ID: ${event.lastEventId}`);
+          }
+        } catch (parseError) {
+          console.warn(`[SSE诊断] 消息预解析失败:`, parseError);
+        }
+
         try {
           const message: BatchProgressMessage = JSON.parse(event.data);
           console.log(
             `[SSE诊断] 消息解析成功 - 类型: ${message.type}, ID: ${message.id}`,
           );
+
+          // 增强调试日志 - 记录chunk_completed消息的详细时间信息
+          if (message.type === "chunk_completed") {
+            const chunk_id = message.chunk_id;
+            const original_timestamp = message.timestamp;
+            const current_time = Date.now();
+            const msg_time = new Date(current_time);
+
+            if (original_timestamp) {
+              // 处理时间戳类型 - 后端可能发送秒或毫秒
+              let original_date: Date;
+              if (typeof original_timestamp === "number") {
+                if (original_timestamp > 10000000000) {
+                  // 已经是毫秒
+                  original_date = new Date(original_timestamp);
+                } else {
+                  // 是秒，需要转换为毫秒
+                  original_date = new Date(original_timestamp * 1000);
+                }
+              } else {
+                // 字符串时间戳
+                original_date = new Date(original_timestamp);
+              }
+
+              const delay_from_completion =
+                (current_time - original_date.getTime()) / 1000; // 转换为秒
+
+              console.log(`[CHUNK_TRACKING] Chunk ${chunk_id} 前端接收详情:`);
+              console.log(
+                `  [CHUNK_TRACKING] 后端原始完成时间: ${original_date.toLocaleTimeString()}`,
+              );
+              console.log(
+                `  [CHUNK_TRACKING] 前端接收时间: ${msg_time.toLocaleTimeString()}`,
+              );
+              console.log(
+                `  [CHUNK_TRACKING] 从chunk完成到前端接收总延迟: ${delay_from_completion.toFixed(6)}秒`,
+              );
+              console.log(`  [CHUNK_TRACKING] 前端接收时间戳: ${current_time}`);
+              console.log(
+                `  [CHUNK_TRACKING] 后端原始时间戳: ${original_timestamp}`,
+              );
+            }
+          }
 
           // 更新lastEventId用于断点续传
           if (event.lastEventId) {

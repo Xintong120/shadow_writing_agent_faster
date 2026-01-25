@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { TaskProvider } from "@/contexts/TaskContext";
 import { Toaster } from "sonner";
@@ -18,6 +18,7 @@ import { ActiveTab } from "@/types/navigation";
 import { TedTalk } from "@/types/ted";
 import { LearningStatus } from "@/types/history";
 import { taskHistoryStorage } from "@/services/taskHistoryStorage";
+import { sseService } from "@/services/progress";
 
 // Auth Wrapper Component with State Machine
 const AuthWrapper = () => {
@@ -30,7 +31,10 @@ const AuthWrapper = () => {
   const [currentLearningTalk, setCurrentLearningTalk] =
     useState<TedTalk | null>(null);
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
+  const [lastEventId, setLastEventId] = useState<string | null>(null); // 新增：用于断点续传的最后事件ID
+  const [receivedChunks, setReceivedChunks] = useState<any[]>([]); // 新增：存储ProcessingPage已接收的chunks
   const [isDarkMode, setIsDarkMode] = useState(false);
+  const hasJumpedToLearningCards = useRef(false); // 防止多次跳转到学习卡片页面
   const [historyInitialTab, setHistoryInitialTab] =
     useState<LearningStatus>("todo");
 
@@ -135,14 +139,47 @@ const AuthWrapper = () => {
   };
 
   // 新增：处理第一个chunk完成，跳转到学习卡片页面
-  const handleFirstChunkCompleted = useCallback((taskId: string) => {
-    console.log(
-      "[App] handleFirstChunkCompleted 被调用，跳转到学习卡片页面",
-      taskId,
-    );
-    setCurrentTaskId(taskId);
-    setAppState("learning_cards");
-  }, []);
+  const handleFirstChunkCompleted = useCallback(
+    (taskId: string, receivedChunks: any[]) => {
+      // 防止多次跳转
+      if (hasJumpedToLearningCards.current) {
+        console.log("[App] 已跳转到学习卡片页面，忽略重复调用");
+        return;
+      }
+
+      console.log(
+        "[App] handleFirstChunkCompleted 被调用，跳转到学习卡片页面",
+        taskId,
+      );
+      console.log(
+        "[App] 收到的完整receivedChunks数组长度:",
+        receivedChunks.length,
+      );
+      console.log("[App] 收到的完整receivedChunks数组:", receivedChunks);
+
+      // 打印每个chunk的详细信息
+      receivedChunks.forEach((chunk, index) => {
+        console.log(`[App] Chunk ${index}:`, {
+          chunk_id: chunk.chunk_id,
+          type: chunk.type,
+          hasResult: !!chunk.result,
+          timestamp: chunk.timestamp,
+          resultLength: chunk.result ? chunk.result.length : 0,
+        });
+      });
+
+      // 使用断点续传，确保LearningPage接收所有消息
+      const currentLastEventId = sseService.getLastEventId();
+      console.log("[App] 使用断点续传，lastEventId:", currentLastEventId);
+
+      hasJumpedToLearningCards.current = true;
+      setCurrentTaskId(taskId);
+      setLastEventId(currentLastEventId); // 传递正确的lastEventId用于断点续传
+      setReceivedChunks(receivedChunks); // 存储已接收的chunks
+      setAppState("learning_cards");
+    },
+    [],
+  );
 
   if (authStatus === "logged_out") {
     return <LoginPage onLogin={login} />;
@@ -181,6 +218,8 @@ const AuthWrapper = () => {
               taskId={currentTaskId}
               tedTitle={processedTalks[0]?.title}
               tedSpeaker={processedTalks[0]?.speaker}
+              lastEventId={lastEventId}
+              receivedChunks={receivedChunks}
             />
           ) : (
             currentTaskId && (

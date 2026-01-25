@@ -118,7 +118,7 @@ function calculateStreakDays(learnedAtDates: string[]): number {
   const today = new Date().toDateString()
 
   // 如果今天没学习，从昨天开始算
-  let currentDate = dates[0] === today
+  const currentDate = dates[0] === today
     ? new Date()
     : new Date(Date.now() - 86400000)
 

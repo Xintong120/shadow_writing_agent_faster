@@ -20,20 +20,32 @@ def finalize_single_chunk(state: ChunkProcessState) -> dict:
     final_result = state.get("corrected_shadow") or state.get("validated_shadow")
 
     if final_result:
-        print(f"[Pipeline {chunk_id}] [OK] Finalized")
+        completion_time = time.time()
+        formatted_time = time.strftime('%H:%M:%S', time.localtime(completion_time))
+        print(f"[Pipeline {chunk_id}] [OK] Finalized - 时间: {formatted_time}")
+        print(f"[CHUNK_DEBUG] Chunk {chunk_id} 完成 - task_id: {task_id}, 时间戳: {completion_time}")
 
         # 【关键】使用LangGraph流式输出推送chunk完成消息
         writer = get_stream_writer()
-        writer({
+        chunk_data = {
             "type": "chunk_completed",
             "chunk_id": chunk_id,
             "task_id": task_id,
             "result": final_result,  # 完整的shadow writing结果
-            "timestamp": time.time()
-        })
+            "timestamp": completion_time
+        }
+
+        # 增强调试日志 - 记录消息发送的精确时间
+        message_send_time = time.time()
+        print(f"[CHUNK_DEBUG] 发送chunk_completed消息 - chunk_id: {chunk_id}, 消息时间戳: {completion_time}")
+        print(f"[CHUNK_DEBUG] LangGraph writer调用时间: {time.strftime('%H:%M:%S', time.localtime(message_send_time))}")
+        print(f"[CHUNK_DEBUG] 从chunk完成到消息发送延迟: {message_send_time - completion_time:.6f}秒")
+
+        writer(chunk_data)
 
         # 【重要】只返回final_shadow_chunks，避免并发写入主State的其他字段
         return {"final_shadow_chunks": [final_result]}
     else:
-        print(f"[Pipeline {chunk_id}] [ERROR] No valid result")
+        print(f"[Pipeline {chunk_id}] [ERROR] No valid result - 时间: {time.strftime('%H:%M:%S', time.localtime(time.time()))}")
+        print(f"[CHUNK_DEBUG] Chunk {chunk_id} 失败 - task_id: {task_id}, 时间戳: {time.time()}")
         return {"final_shadow_chunks": []}

@@ -541,14 +541,17 @@ async def progress_stream(task_id: str, last_event_id: str | None = None):
 
     # 详细的连接诊断日志
     request_start_time = time.time()
-    print("\n[SSE诊断] =========================================")
-    print(f"[SSE诊断] 新SSE连接请求 - 任务ID: {task_id}")
-    print(f"[SSE诊断] 请求开始时间: {time.strftime('%H:%M:%S', time.localtime(request_start_time))}")
-    print(f"[SSE诊断] 请求时间戳: {request_start_time}")
-    print(f"[SSE诊断] last_event_id参数: {last_event_id}")
-    print(f"[SSE诊断] 请求URL: /api/v1/progress/{task_id}")
-    print(f"[SSE诊断] 当前活跃任务数量: {sse_manager.get_active_tasks_count()}")
-    print(f"[SSE诊断] 当前任务消息数量: {sse_manager.get_task_message_count(task_id)}")
+    print("\n[SSE_CONNECTION_DEBUG] =========================================")
+    print(f"[SSE_CONNECTION_DEBUG] 新SSE连接请求 - 任务ID: {task_id}")
+    print(f"[SSE_CONNECTION_DEBUG] 请求开始时间: {time.strftime('%H:%M:%S', time.localtime(request_start_time))}")
+    print(f"[SSE_CONNECTION_DEBUG] 请求时间戳: {request_start_time}")
+    print(f"[SSE_CONNECTION_DEBUG] last_event_id参数: {last_event_id}")
+    print(f"[SSE_CONNECTION_DEBUG] 请求URL: /api/v1/progress/{task_id}")
+    print(f"[SSE_CONNECTION_DEBUG] 当前活跃任务数量: {sse_manager.get_active_tasks_count()}")
+    print(f"[SSE_CONNECTION_DEBUG] 当前任务消息数量: {sse_manager.get_task_message_count(task_id)}")
+
+    # 检查当前队列中的消息（这里不能await，因为不在async函数中）
+    print(f"[SSE_CONNECTION_DEBUG] 当前任务消息数量: {sse_manager.get_task_message_count(task_id)}")
 
     # 检查任务是否存在于task_manager中
     task_info = task_manager.get_task(task_id)
@@ -593,6 +596,17 @@ async def progress_stream(task_id: str, last_event_id: str | None = None):
                 for i, msg in enumerate(messages[:5]):  # 只显示前5条
                     print(f"  [{i+1}] 类型: {msg.get('type')}, ID: {msg.get('id')}, 时间戳: {msg.get('timestamp')}")
 
+                    # 增强调试日志 - 记录chunk_completed消息的详细时间信息
+                    if msg.get('type') == 'chunk_completed':
+                        chunk_id = msg.get('chunk_id')
+                        original_timestamp = msg.get('timestamp', 0)
+                        current_time = time.time()
+                        if original_timestamp > 0:
+                            delay_from_completion = current_time - original_timestamp
+                            print(f"    [CHUNK_TRACKING] Chunk {chunk_id} 原始完成时间: {time.strftime('%H:%M:%S', time.localtime(original_timestamp))}")
+                            print(f"    [CHUNK_TRACKING] 当前时间: {time.strftime('%H:%M:%S', time.localtime(current_time))}")
+                            print(f"    [CHUNK_TRACKING] 从chunk完成到前端检索延迟: {delay_from_completion:.6f}秒")
+
             # 发送缓存的消息
             send_cached_start = time.time()
             cached_count = 0
@@ -615,29 +629,32 @@ async def progress_stream(task_id: str, last_event_id: str | None = None):
                 try:
                     message_check_count += 1
 
-                    # 检查是否有新消息
+                    # 获取所有新消息（ID > last_sent_id）
                     check_start = time.time()
-                    latest_message = await sse_manager.get_latest_message(task_id)
+                    all_messages = await sse_manager.get_messages(task_id)
+                    new_messages = [msg for msg in all_messages if msg['id'] > last_sent_id]
                     check_duration = time.time() - check_start
 
-                    if latest_message and latest_message['id'] != last_sent_id:
-                        # 发送新消息
+                    if new_messages:
+                        # 发送所有新消息
                         send_msg_start = time.time()
-                        event_data = f"id: {latest_message['id']}\ndata: {json.dumps(latest_message)}\n\n"
-                        yield event_data
+                        for msg in new_messages:
+                            event_data = f"id: {msg['id']}\ndata: {json.dumps(msg)}\n\n"
+                            yield event_data
+                            new_messages_sent += 1
+                            last_sent_id = msg['id']
+
+                            print(f"[SSE诊断] 发送新消息 #{new_messages_sent} - 类型: {msg.get('type')}, ID: {msg['id']}, 检查耗时: {check_duration:.3f}秒")
+
+                            # 如果是完成消息，结束流
+                            if msg.get('type') == 'completed':
+                                total_stream_duration = time.time() - stream_start_time
+                                print(f"[SSE诊断] 检测到完成消息，结束流 - 总流持续时间: {total_stream_duration:.3f}秒")
+                                print(f"[SSE诊断] 消息检查次数: {message_check_count}, 新消息数量: {new_messages_sent}")
+                                return  # 直接返回，不再继续循环
+
                         send_duration = time.time() - send_msg_start
-
-                        new_messages_sent += 1
-                        last_sent_id = latest_message['id']
-
-                        print(f"[SSE诊断] 发送新消息 #{new_messages_sent} - 类型: {latest_message.get('type')}, ID: {latest_message['id']}, 检查耗时: {check_duration:.3f}秒, 发送耗时: {send_duration:.3f}秒")
-
-                        # 如果是完成消息，结束流
-                        if latest_message.get('type') == 'completed':
-                            total_stream_duration = time.time() - stream_start_time
-                            print(f"[SSE诊断] 检测到完成消息，结束流 - 总流持续时间: {total_stream_duration:.3f}秒")
-                            print(f"[SSE诊断] 消息检查次数: {message_check_count}, 新消息数量: {new_messages_sent}")
-                            break
+                        print(f"[SSE诊断] 批量发送完成 - 本次发送: {len(new_messages)} 条消息, 发送耗时: {send_duration:.3f}秒")
 
                     # 每100次检查输出一次状态
                     if message_check_count % 100 == 0:

@@ -93,7 +93,7 @@ class ChatStorageManager {
       const store = transaction.objectStore('messages')
 
       // 首先尝试使用索引查询有userId的消息
-      let messages: Message[] = []
+      const messages: Message[] = []
       let queryCompleted = false
 
       const tryIndexedQuery = () => {

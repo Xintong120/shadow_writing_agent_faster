@@ -179,3 +179,9 @@ docs/
 
 # Tests directory
 backend/tests/
+
+# Backup files
+*.bak
+
+# Documentation files
+*.md

@@ -39,6 +39,7 @@ out/
 .DS_Store
 Thumbs.db
 *.bak
+*.backup
 
 # ========================================
 # Logs

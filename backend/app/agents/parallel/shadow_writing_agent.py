@@ -2,7 +2,6 @@
 # 并行处理的Shadow Writing Agent
 
 from app.state import ChunkProcessState
-from app.utils import ensure_dependencies, create_llm_function_native, ensure_mistral_dependencies, create_llm_function_mistral
 
 
 def shadow_writing_single_chunk(state: ChunkProcessState) -> dict:
@@ -17,38 +16,19 @@ def shadow_writing_single_chunk(state: ChunkProcessState) -> dict:
     chunk_text = state.get("chunk_text", "")
     chunk_id = state.get("chunk_id", 0)
     task_id = state.get("task_id")
-    total_chunks = state.get("total_chunks", 1)  # 从state获取总数，避免除零错误
+    total_chunks = state.get("total_chunks", 1)
 
     print(f"\n[Pipeline {chunk_id}] Shadow Writing...")
     print(f"[Pipeline {chunk_id}] task_id: {task_id}, chunk_length: {len(chunk_text)}, total_chunks: {total_chunks}")
-
-    # 推送单个语义块开始处理消息
-    if task_id and total_chunks > 0:
-        import asyncio
-        from app.sse_manager import sse_manager
-        asyncio.create_task(
-            sse_manager.add_message(task_id, {
-                "type": "chunk_progress",
-                "current_chunk": chunk_id + 1,
-                "total_chunks": total_chunks,
-                "stage": "shadow_writing",
-                "message": f"处理语义块 {chunk_id + 1}/{total_chunks}: 生成Shadow Writing"
-            })
-        )
-        print(f"[Pipeline {chunk_id}] 推送语义块进度消息到task_id: {task_id}, 进度: {chunk_id + 1}/{total_chunks}")
 
     if not chunk_text:
         return {"raw_shadow": None, "error": "Empty chunk"}
     
     try:
-        # 根据配置选择使用的 LLM 提供商
-        from app.config import settings
-        if settings.use_mistral_for_shadow_writing and settings.mistral_api_key:
-            ensure_mistral_dependencies()
-            llm_function = create_llm_function_mistral()
-        else:
-            ensure_dependencies()
-            llm_function = create_llm_function_native()
+        # 使用 LLM Service 获取 LLM
+        from app.services.llm import get_llm_service
+        llm_service = get_llm_service()
+        llm = llm_service.create_shadow_writing_llm()
         
         output_format = {
             "original": "完整原句, str",
@@ -238,7 +218,10 @@ Now extract ONE sentence and perform Shadow Writing migration.
 """
         
         # 直接调用LLM，不再强制等待
-        result = llm_function(shadow_prompt, output_format)
+        print(f"[Pipeline {chunk_id}] 调用 llm()...")
+        result = llm(shadow_prompt, output_format)
+        print(f"[Pipeline {chunk_id}] LLM返回类型: {type(result)}")
+        print(f"[Pipeline {chunk_id}] LLM返回内容: {result}")
         
         if result and isinstance(result, dict):
             # 标准化结果（添加paragraph字段）
@@ -248,10 +231,19 @@ Now extract ONE sentence and perform Shadow Writing migration.
                 'map': result.get('map', {}),
                 'paragraph': chunk_text
             }
-            
+
+            # 成功后更新数据库进度
+            if task_id and total_chunks > 0:
+                try:
+                    from app.db import task_db
+                    task_db.increment_completed_chunk(task_id)
+                    print(f"[Pipeline {chunk_id}] 更新完成数: {chunk_id + 1}/{total_chunks}")
+                except Exception as e:
+                    print(f"[Pipeline {chunk_id}] 更新数据库失败: {e}")
+
             print(f"[Pipeline {chunk_id}] [OK] Shadow Writing完成")
             print(f"   原句: {standardized_result['original'][:60]}...")
-            
+
             return {"raw_shadow": standardized_result}
         else:
             print(f"[Pipeline {chunk_id}] [ERROR] LLM返回无效结果")

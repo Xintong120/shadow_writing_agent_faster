@@ -1,4 +1,3 @@
-from litellm import completion
 from app.config import settings
 import json
 import time
@@ -7,6 +6,7 @@ from collections import deque
 from typing import Callable, Optional, Dict, Any
 from app.monitoring.api_key_monitor import api_key_monitor
 import httpx
+from litellm import completion
 
 def ensure_dependencies():
     """检查是否有任何可用的 API key"""
@@ -548,7 +548,10 @@ def initialize_mistral_key_manager(cooldown_seconds: int = 60):
 
 def create_llm_function(system_prompt: Optional[str] = None, model: Optional[str] = None) -> Callable:
     """创建 LLM 调用函数
-
+    
+    DEPRECATED: 请使用 create_llm_for_purpose() 替代
+    此函数保留仅用于向后兼容，未来版本将移除。
+    
     Args:
         system_prompt: 系统提示词（可选）
         model: 模型名称（可选，默认使用settings.model_name）
@@ -556,6 +559,12 @@ def create_llm_function(system_prompt: Optional[str] = None, model: Optional[str
     Returns:
         callable: LLM 调用函数
     """
+    import warnings
+    warnings.warn(
+        "create_llm_function() is deprecated, use create_llm_for_purpose() instead",
+        DeprecationWarning,
+        stacklevel=2
+    )
 
     def call_llm(user_prompt: str, output_format: Optional[Dict] = None, temperature: Optional[float] = None, _retry_count: int = 0) -> Any:
         """调用 LLM（支持自动 Key 切换）
@@ -679,17 +688,27 @@ def create_llm_function(system_prompt: Optional[str] = None, model: Optional[str
 def create_llm_function_native() -> Callable:
     """创建原生 LLM 函数（兼容旧代码）
 
+    DEPRECATED: 请使用 create_llm_for_purpose() 替代
+    
     使用 settings.model_name 配置的默认模型
 
     Returns:
         callable: LLM 调用函数
     """
+    import warnings
+    warnings.warn(
+        "create_llm_function_native() is deprecated, use create_llm_for_purpose() instead",
+        DeprecationWarning,
+        stacklevel=2
+    )
     return create_llm_function(system_prompt=settings.system_prompt)
 
 
 def create_llm_function_mistral(system_prompt: Optional[str] = None, small_model: Optional[str] = None) -> Callable:
     """创建独立的 Mistral LLM 函数
 
+    DEPRECATED: 请使用 create_llm_for_purpose() 替代
+    
     使用 Mistral API 和独立配置，不依赖 Groq
 
     Args:
@@ -699,6 +718,13 @@ def create_llm_function_mistral(system_prompt: Optional[str] = None, small_model
     Returns:
         callable: LLM 调用函数
     """
+    import warnings
+    warnings.warn(
+        "create_llm_function_mistral() is deprecated, use create_llm_for_purpose() instead",
+        DeprecationWarning,
+        stacklevel=2
+    )
+
     def call_llm_mistral(user_prompt: str, output_format: Optional[Dict] = None, temperature: Optional[float] = None, _retry_count: int = 0) -> Any:
         """调用 Mistral LLM（支持独立 Key 轮换）
 
@@ -711,6 +737,8 @@ def create_llm_function_mistral(system_prompt: Optional[str] = None, small_model
         Returns:
             str or dict: LLM 响应内容
         """
+        from litellm import completion
+        
         # 获取当前可用的 Mistral API Key
         if mistral_key_manager:
             current_key = mistral_key_manager.get_key()

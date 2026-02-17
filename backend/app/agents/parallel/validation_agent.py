@@ -9,12 +9,12 @@ def validation_single_chunk(state: ChunkProcessState) -> dict:
     """验证单个Chunk的Shadow结果（并行版本）"""
     chunk_id = state.get("chunk_id", 0)
     raw_shadow = state.get("raw_shadow")
-    
+
     print(f"[Pipeline {chunk_id}] Validation...")
-    
+
     if not raw_shadow:
         return {"validated_shadow": None}
-    
+
     try:
         # 检查必要字段
         if all(raw_shadow.get(key) for key in ['original', 'imitation', 'map']):

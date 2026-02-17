@@ -1,4 +1,5 @@
 import re
+import asyncio
 from typing import List
 from app.state import Shadow_Writing_State
 
@@ -80,6 +81,15 @@ class Semantic_Chunking_Agent:
 
         # 调用分块处理，传递task_id用于进度推送
         chunks = self.process_transcript(text, task_id)
+        total = len(chunks)
+
+        # 直接更新数据库，告知总共有多少个 chunks
+        if task_id:
+            try:
+                from app.db import task_db
+                task_db.update_chunks_info(task_id, total, completed_chunks=0)
+            except Exception as e:
+                print(f"[SEMANTIC CHUNKING] 更新数据库失败: {e}")
 
         return {
             **state,  # 保留原有状态

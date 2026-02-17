@@ -5,7 +5,32 @@ from app.tools.ted_ai_speaker_extractor import TedAISpeakerExtractor
 import re
 import time
 import requests
+from requests.exceptions import ProxyError as RequestsProxyError
+from httpx import ProxyError as HttpxProxyError
 from typing import List, Dict, Any
+
+
+def _is_proxy_related_error(e: Exception) -> bool:
+    """
+    检测错误是否与代理相关（作为异常类型检测的后备）
+    
+    Args:
+        e: 捕获的异常对象
+        
+    Returns:
+        bool: True 如果错误与代理相关
+    """
+    error_str = str(e).lower()
+    proxy_indicators = [
+        'proxy', 
+        'proxyerror',
+        'winerror 10061',
+        'winerror 10060',
+        'unable to connect to proxy',
+        'cannot connect to proxy',
+        'connection refused',
+    ]
+    return any(indicator in error_str for indicator in proxy_indicators)
 
 
 def _enrich_with_ai_assistance(basic_info: dict) -> dict:
@@ -450,18 +475,33 @@ def ted_tavily_search(query: str, max_results: int = 5) -> List[Dict[str, Any]]:
 
             return simplified_results
 
-        except (ConnectionAbortedError, ConnectionError, requests.exceptions.ConnectionError,
-                requests.exceptions.Timeout, requests.exceptions.RequestException) as e:
-            # 网络相关错误，进行重试
+        except (RequestsProxyError, HttpxProxyError) as e:
+            print(f"[ERROR] 代理连接失败: {e}")
+            raise Exception("TED搜索失败：代理连接被拒绝，请检查系统代理设置")
+
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectTimeout,
+                requests.exceptions.ReadTimeout) as e:
             if attempt == max_retries - 1:
                 print(f"[ERROR] 搜索失败，已重试 {max_retries} 次: {e}")
-                raise Exception(f"TED搜索失败（网络连接问题）: {e}")
+                raise Exception("TED搜索失败：连接超时，请稍后重试")
+            else:
+                print(f"[WARNING] 连接超时 (尝试 {attempt + 1}/{max_retries}): {e}")
+                continue
+
+        except (ConnectionAbortedError, ConnectionError, 
+                requests.exceptions.ConnectionError, requests.exceptions.RequestException) as e:
+            if _is_proxy_related_error(e):
+                print(f"[ERROR] 代理连接失败: {e}")
+                raise Exception("TED搜索失败：代理连接被拒绝，请检查系统代理设置")
+            
+            if attempt == max_retries - 1:
+                print(f"[ERROR] 搜索失败，已重试 {max_retries} 次: {e}")
+                raise Exception("TED搜索失败：网络连接不稳定，请检查网络后重试")
             else:
                 print(f"[WARNING] 网络连接错误 (尝试 {attempt + 1}/{max_retries}): {e}")
                 continue
 
         except Exception as e:
-            # 非网络错误，直接抛出
             print(f"[ERROR] 搜索失败: {e}")
             raise
 

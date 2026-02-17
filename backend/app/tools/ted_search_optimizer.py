@@ -6,7 +6,7 @@
 """
 
 from typing import List
-from app.utils import create_llm_function_light
+from app.services.llm.llm_provider import UnifiedLLMProvider
 
 
 def optimize_search_query(user_topic: str) -> str:
@@ -39,21 +39,26 @@ Rules:
 4. Use terms commonly found in TED talk titles
 
 Examples:
-- "我想学习关于气候变化的英语" -> "climate change environment"
-- "提高领导力" -> "leadership management"
-- "量子计算" -> "quantum computing technology"
+- "我想学习关于气候变化的英语" -> {{"keywords": "climate change environment"}}
+- "提高领导力" -> {{"keywords": "leadership management"}}
+- "量子计算" -> {{"keywords": "quantum computing technology"}}
 
-IMPORTANT: Return a single string of space-separated keywords, NOT a list or array.
-
-Output the optimized keywords as a string in JSON format.
+CRITICAL: You MUST return JSON with the key "keywords" (not "optimized_keywords", not "optimized", not any other key).
+Output format: {{"keywords": "space-separated-keywords"}}
 """
     
     try:
-        llm = create_llm_function_light()
+        llm = UnifiedLLMProvider.create_for_purpose("default")
         result = llm(prompt, {"keywords": "Optimized search keywords as space-separated string, str"}, temperature=0.1)
         
         if result and isinstance(result, dict):
-            keywords = result.get("keywords", user_topic)
+            # 尝试多个可能的key名称（LLM可能使用不同的命名）
+            keywords = (
+                result.get("keywords") or 
+                result.get("optimized_keywords") or
+                result.get("optimized") or
+                user_topic
+            )
             
             # 如果LLM返回了列表，转换为字符串
             if isinstance(keywords, list):
@@ -101,15 +106,12 @@ Examples:
 - Input: "AI ethics"
 - Output: {{"alternatives": ["artificial intelligence morality", "machine learning bias", "technology society impact"]}}
 
-IMPORTANT: 
-- Return a list of 3 strings, where each string contains space-separated keywords
-- Use the JSON key "alternatives" (not "alternative_queries" or other variations)
-
-Output in JSON format with the key "alternatives".
+CRITICAL: You MUST return JSON with the key "alternatives" (not "alternative_queries", not "alternative_search_queries", not "queries", not any other key).
+Output format: {{"alternatives": ["query1", "query2", "query3"]}}
 """
     
     try:
-        llm = create_llm_function_light()
+        llm = UnifiedLLMProvider.create_for_purpose("default")
         result = llm(prompt, {"alternatives": "List of 3 alternative query strings, list[str]"}, temperature=0.2)
         
         if result and isinstance(result, dict):

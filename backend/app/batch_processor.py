@@ -7,6 +7,7 @@ from app.sse_manager import sse_manager
 from app.tools.ted_transcript_tool import extract_ted_transcript
 from app.workflows import create_parallel_shadow_writing_workflow
 from app.enums import TaskStatus, MessageType, ProcessingStep
+from app.db import task_db, history_db, TaskStatus as DBTaskStatus
 from langchain_core.runnables import RunnableConfig
 from typing import cast
 from app.state import Shadow_Writing_State
@@ -35,6 +36,14 @@ async def process_urls_batch(task_id: str, urls: List[str]):
 
     print(f"\n[BATCH PROCESSOR] 开始处理 {total} 个URLs - 开始时间: {time.strftime('%H:%M:%S')}")
 
+    # 初始化数据库状态
+    task_db.update(task_id, {
+        "status": DBTaskStatus.PENDING.value,
+        "current_step": "准备处理",
+        "total": total,
+        "progress": 0
+    })
+
     # 发送开始消息
     print(f"[BATCH_PROCESSOR] [{task_id}] 准备发送started消息 - 时间: {time.strftime('%H:%M:%S')}")
     await sse_manager.add_message(
@@ -57,8 +66,19 @@ async def process_urls_batch(task_id: str, urls: List[str]):
         try:
             print(f"\n[BATCH PROCESSOR] 处理 [{idx}/{total}]: {url} - 开始时间: {time.strftime('%H:%M:%S')}")
             
-            # 更新进度
+            # 更新进度到数据库
             task_manager.update_progress(task_id, idx, url)
+            
+            progress = int((idx - 1) / total * 100)
+            task_db.update(task_id, {
+                "status": DBTaskStatus.PARSING.value,
+                "current_step": f"处理 ({idx}/{total}): {url[:50]}...",
+                "current": idx - 1,
+                "total": total,
+                "current_url": url,
+                "progress": progress
+            })
+            
             print(f"[BATCH_PROCESSOR] [{task_id}] 准备发送progress消息 - URL {idx}/{total} - 时间: {time.strftime('%H:%M:%S')}")
             await sse_manager.add_message(
                 task_id,
@@ -73,6 +93,11 @@ async def process_urls_batch(task_id: str, urls: List[str]):
             print(f"[BATCH_PROCESSOR] [{task_id}] progress消息发送完成 - URL {idx}/{total} - 时间: {time.strftime('%H:%M:%S')}")
 
             # ========== 步骤1: 提取Transcript ==========
+            task_db.update(task_id, {
+                "status": DBTaskStatus.PARSING.value,
+                "current_step": f"提取字幕 ({idx}/{total})"
+            })
+            
             await sse_manager.add_message(
                 task_id,
                 {
@@ -93,6 +118,11 @@ async def process_urls_batch(task_id: str, urls: List[str]):
             print(f"   提取字幕成功: {len(transcript_data.transcript)} 字符")
             
             # ========== 步骤2: 运行Shadow Writing工作流 ==========
+            task_db.update(task_id, {
+                "status": DBTaskStatus.SHADOW_WRITING.value,
+                "current_step": f"生成Shadow Writing ({idx}/{total})"
+            })
+            
             await sse_manager.add_message(
                 task_id,
                 {
@@ -121,7 +151,8 @@ async def process_urls_batch(task_id: str, urls: List[str]):
             
             # 运行并行工作流（流式版本，带Langfuse监控）
             print("   启动并行Shadow Writing工作流（流式）...")
-            from app.main import langfuse_handler
+            from app.dependencies import get_langfuse_handler
+            langfuse_handler = get_langfuse_handler()
 
             # 使用astream监听chunk完成事件
             config = cast(RunnableConfig, {"callbacks": [langfuse_handler]}) if langfuse_handler else None
@@ -198,6 +229,29 @@ async def process_urls_batch(task_id: str, urls: List[str]):
             
             task_manager.add_result(task_id, result_data)
             
+            # 保存到历史记录
+            import uuid as uuid_lib
+            record_id = str(uuid_lib.uuid4())
+            history_db.create(
+                record_id=record_id,
+                task_id=task_id,
+                ted_title=transcript_data.title,
+                ted_speaker=transcript_data.speaker,
+                ted_url=url,
+                result={"chunks": processed_results},
+                transcript=transcript_data.transcript
+            )
+            
+            # 更新数据库状态
+            task_db.update(task_id, {
+                "status": DBTaskStatus.COMPLETED.value,
+                "current_step": f"完成 ({idx}/{total}): {transcript_data.title[:30]}...",
+                "current": idx,
+                "total": total,
+                "current_url": url,
+                "progress": int(idx / total * 100)
+            })
+            
             # ========== 步骤4: 推送完成消息 ==========
             await sse_manager.add_message(
                 task_id,
@@ -217,6 +271,13 @@ async def process_urls_batch(task_id: str, urls: List[str]):
             
             task_manager.add_error(task_id, error_msg)
             
+            # 更新数据库错误状态
+            task_db.update(task_id, {
+                "status": DBTaskStatus.FAILED.value,
+                "current_step": f"失败 ({idx}/{total})",
+                "error": error_msg
+            })
+            
             await sse_manager.add_message(
                 task_id,
                 {
@@ -230,10 +291,17 @@ async def process_urls_batch(task_id: str, urls: List[str]):
     
     # ========== 全部完成 ==========
     task_manager.complete_task(task_id)
-
+    
     task = task_manager.get_task(task_id)
     end_time = time.time()
     total_duration = end_time - start_time
+    
+    # 更新数据库完成状态
+    task_db.update(task_id, {
+        "status": DBTaskStatus.COMPLETED.value,
+        "current_step": "全部完成",
+        "progress": 100
+    })
 
     await sse_manager.add_message(
         task_id,

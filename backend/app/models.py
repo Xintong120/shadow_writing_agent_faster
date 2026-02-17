@@ -126,18 +126,73 @@ class BatchProcessRequest(BaseModel):
 class BatchProcessResponse(BaseModel):
     """批量处理响应 / Batch Process Response"""
     success: bool = Field(..., description="是否成功 / Success status")
-    task_id: str = Field(..., description="任务ID / Task ID")
+    task_id: str = Field(..., description="任务ID（第一个URL） / Task ID (first URL)")
+    task_ids: List[str] = Field(..., description="所有URL的任务ID列表 / Task IDs for all URLs")
     total: int = Field(..., description="URL总数 / Total URLs")
     message: str = Field(..., description="提示信息 / Message")
 
 
 class TaskStatusResponse(BaseModel):
-    """任务状态响应 / Task Status Response"""
+    """任务状态响应 / Task Status Response (轮询方式)"""
     task_id: str
-    status: str  # "pending" | "processing" | "completed" | "failed"
-    total: int
-    current: int
-    urls: List[str]
-    results: List[Dict]
-    errors: List[str]
+    status: str
+    current_step: Optional[str] = None
+    progress: int = 0
+    total: int = 0
+    current: int = 0
     current_url: Optional[str] = None
+    result: Optional[List[Dict]] = None
+    error: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    total_chunks: int = 0
+    completed_chunks: int = 0
+
+
+class TaskCreateResponse(BaseModel):
+    """任务创建响应 / Task Create Response"""
+    success: bool
+    task_id: str
+    ted_info: Optional[Dict] = None
+    message: str
+
+
+class TaskDeleteResponse(BaseModel):
+    """任务删除响应 / Task Delete Response"""
+    success: bool
+    message: str
+
+
+class HistoryListResponse(BaseModel):
+    """历史列表响应 / History List Response"""
+    success: bool
+    records: List[Dict]
+    total: int
+
+
+class HistoryDetailResponse(BaseModel):
+    """历史详情响应 / History Detail Response"""
+    success: bool
+    record: Optional[Dict] = None
+
+
+# ============ 生词本模型 ============
+
+class VocabWord(BaseModel):
+    """生词数据模型"""
+    id: str = Field(..., description="唯一标识")
+    word: str = Field(..., description="单词")
+    definition: str = Field(..., description="释义")
+    dictionary: str = Field(..., description="来源词典")
+    added_at: float = Field(..., description="添加时间戳")
+
+
+class AddVocabRequest(BaseModel):
+    """批量添加生词请求"""
+    words: List[VocabWord] = Field(..., description="生词列表")
+
+
+class VocabResponse(BaseModel):
+    """生词列表响应"""
+    words: List[VocabWord]
+    total: int

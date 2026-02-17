@@ -2,12 +2,13 @@
 # 并行处理的Quality Check Agent
 
 from app.state import ChunkProcessState
-from app.utils import ensure_dependencies, create_llm_function_native, ensure_mistral_dependencies, create_llm_function_mistral
 
 
 def quality_single_chunk(state: ChunkProcessState) -> dict:
     """质量评估单个Chunk（并行版本）"""
     chunk_id = state.get("chunk_id", 0)
+    task_id = state.get("task_id")
+    total_chunks = state.get("total_chunks", 1)
     validated = state.get("validated_shadow")
 
     print(f"[Pipeline {chunk_id}] Quality Check...")
@@ -16,14 +17,10 @@ def quality_single_chunk(state: ChunkProcessState) -> dict:
         return {"quality_passed": False, "quality_score": 0.0}
 
     try:
-        # 根据配置选择使用的 LLM 提供商（与Shadow Writing保持一致）
-        from app.config import settings
-        if settings.use_mistral_for_shadow_writing and settings.mistral_api_key:
-            ensure_mistral_dependencies()
-            llm_function = create_llm_function_mistral()
-        else:
-            ensure_dependencies()
-            llm_function = create_llm_function_native()
+        # 使用 LLM Service 获取 LLM
+        from app.services.llm import get_llm_service
+        llm_service = get_llm_service()
+        llm = llm_service.create_quality_llm()
 
         # 获取验证通过的Shadow数据
         original = validated.original
@@ -221,7 +218,7 @@ JSON:"""
             "reasoning": "Summary of evaluation, str"
         }
 
-        result = llm_function(quality_prompt, evaluation_format)
+        result = llm(quality_prompt, evaluation_format)
 
         if result and isinstance(result, dict):
             # 处理基于Sub-CoT的TED迁移质量评估结果

@@ -3,16 +3,135 @@
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pathlib import Path
 import os
-from app.config import settings
-from app.utils import initialize_key_manager
+import httpx
 
-# 导入全局变量
-from app.utils import api_key_manager
+from app.config import settings
+from app.utils import initialize_key_manager, api_key_manager
+
+LITELLM_MODEL_COST_MAP_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+
+_litellm_model_cache: Optional[Dict[str, Any]] = None
+_model_cache_timestamp: float = 0
+_MODEL_CACHE_DURATION = 3600
+
+_litellm_providers: Optional[List[str]] = None
+
+def _get_litellm_providers(model_map: Dict[str, Any]) -> List[str]:
+    """从模型映射中动态提取所有 provider 名称"""
+    global _litellm_providers
+    if _litellm_providers is not None:
+        return _litellm_providers
+
+    providers = set()
+    for model_info in model_map.values():
+        if isinstance(model_info, dict):
+            provider = model_info.get('litellm_provider')
+            if provider:
+                providers.add(provider)
+    _litellm_providers = sorted(list(providers))
+    return _litellm_providers
+
+def _build_provider_aliases() -> Dict[str, str]:
+    """动态构建 provider 别名映射表"""
+    return {
+        # 标准名称
+        'openai': 'openai',
+        'anthropic': 'anthropic',
+        'groq': 'groq',
+        'deepseek': 'deepseek',
+        'mistral': 'mistral',
+        'cohere': 'cohere',
+        'togetherai': 'together_ai',
+        'together_ai': 'together_ai',
+        'openrouter': 'openrouter',
+        'ollama': 'ollama',
+        'azure': 'azure',
+        'vertex_ai': 'vertex_ai',
+        'gemini': 'gemini',
+        'bedrock': 'bedrock',
+        'huggingface': 'huggingface',
+        'replicate': 'replicate',
+        'perplexity': 'perplexity',
+        'xai': 'xai',
+        'cloudflare': 'cloudflare',
+        'fireworks_ai': 'fireworks_ai',
+        'novita': 'novita',
+        'sambanova': 'sambanova',
+        'deepinfra': 'deepinfra',
+        'ai21': 'ai21',
+        'nvidia_nim': 'nvidia_nim',
+        'cerebras': 'cerebras',
+        'vllm': 'vllm',
+        'databricks': 'databricks',
+        'watsonx': 'watsonx',
+        'nebius': 'nebius',
+        'xinference': 'xinference',
+        'lambda_ai': 'lambda_ai',
+        'predibase': 'predibase',
+        'triton': 'triton',
+        'galadriel': 'galadriel',
+        'friendliai': 'friendliai',
+        'litellm_proxy': 'litellm_proxy',
+        'vercel_ai_gateway': 'vercel_ai_gateway',
+    }
 
 router = APIRouter(prefix="/api/config", tags=["config"])
+
+async def _fetch_litellm_model_map(force_refresh: bool = False) -> Dict[str, Any]:
+    """从 litellm GitHub 获取模型成本映射表"""
+    global _litellm_model_cache, _model_cache_timestamp, _litellm_providers
+    import time
+
+    current_time = time.time()
+    if not force_refresh and _litellm_model_cache and (current_time - _model_cache_timestamp) < _MODEL_CACHE_DURATION:
+        return _litellm_model_cache
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(LITELLM_MODEL_COST_MAP_URL)
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, dict):
+                    _litellm_model_cache = data
+                    _model_cache_timestamp = current_time
+                    _litellm_providers = None
+                    return _litellm_model_cache
+    except Exception as e:
+        print(f"[Config] 获取 litellm 模型映射表失败: {e}")
+
+    return {}
+
+def get_models_by_provider(provider: str, model_map: Dict[str, Any]) -> List[Dict[str, str]]:
+    """根据提供商从 litellm 模型映射中动态获取模型列表"""
+    if not model_map:
+        return []
+
+    providers = _get_litellm_providers(model_map)
+    aliases = _build_provider_aliases()
+
+    litellm_provider = aliases.get(provider.lower(), provider.lower())
+
+    if litellm_provider not in providers:
+        return []
+
+    models = []
+    for model_id, model_info in model_map.items():
+        if isinstance(model_info, dict):
+            model_provider = model_info.get('litellm_provider', '')
+            if model_provider == litellm_provider:
+                mode = model_info.get('mode', '')
+                if mode in ['chat', 'completion']:
+                    model_name = model_id.replace('/', ' ').replace('-', ' ').replace('_', ' ').title()
+                    models.append({
+                        'id': model_id,
+                        'name': model_name,
+                        'description': f"{model_provider.title()} {mode} model"
+                    })
+
+    return models
 
 class ConfigSettings(BaseModel):
     """配置设置"""
@@ -197,217 +316,41 @@ async def get_available_models():
 
 @router.get("/models/{provider}")
 async def get_provider_models(provider: str, api_key: Optional[str] = None):
-    """获取指定提供商的可用模型列表"""
+    """获取指定提供商的可用模型列表（动态从 litellm 获取）"""
     try:
-        if provider == "openai":
-            return await _get_openai_models(api_key)
-        elif provider == "groq":
-            return await _get_groq_models(api_key)
-        elif provider == "deepseek":
-            return await _get_deepseek_models(api_key)
-        elif provider == "tavily":
+        if provider == "tavily":
             return _get_tavily_models()
+
+        model_map = await _fetch_litellm_model_map()
+        models = get_models_by_provider(provider, model_map)
+
+        if models:
+            return {
+                "success": True,
+                "message": f"成功获取 {provider} 模型列表",
+                "data": {
+                    "provider": provider,
+                    "models": models
+                }
+            }
         else:
-            # 对于未知提供商，返回默认模型列表
             return {
                 "success": False,
-                "message": f"不支持的提供商: {provider}",
+                "message": f"未找到 {provider} 的模型列表",
                 "data": {
                     "provider": provider,
                     "models": []
                 }
             }
     except Exception as e:
-        # 如果API调用失败，返回默认模型列表
         return {
             "success": False,
-            "message": f"获取{provider}模型列表失败: {str(e)}",
-            "data": _get_default_models(provider)
+            "message": f"获取 {provider} 模型列表失败: {str(e)}",
+            "data": {
+                "provider": provider,
+                "models": []
+            }
         }
-
-async def _get_openai_models(api_key: Optional[str] = None):
-    """获取OpenAI模型列表"""
-    import httpx
-
-    # 如果有API key，尝试从OpenAI API获取
-    if api_key:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(
-                    "https://api.openai.com/v1/models",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json"
-                    }
-                )
-
-                if response.status_code == 200:
-                    data = response.json()
-                    # 过滤出GPT模型
-                    gpt_models = []
-                    for model in data.get("data", []):
-                        model_id = model.get("id", "")
-                        if model_id.startswith("gpt"):
-                            gpt_models.append({
-                                "id": model_id,
-                                "name": model_id.replace("-", " ").title(),
-                                "description": f"OpenAI {model_id} 模型"
-                            })
-
-                    return {
-                        "success": True,
-                        "message": "成功获取OpenAI模型列表",
-                        "data": {
-                            "provider": "openai",
-                            "models": gpt_models
-                        }
-                    }
-        except Exception as e:
-            pass  # 继续使用默认列表
-
-    # 返回默认OpenAI模型列表
-    return {
-        "success": True,
-        "message": "使用默认OpenAI模型列表",
-        "data": {
-            "provider": "openai",
-            "models": [
-                {
-                    "id": "gpt-4",
-                    "name": "GPT-4",
-                    "description": "OpenAI最先进的模型"
-                },
-                {
-                    "id": "gpt-4-turbo",
-                    "name": "GPT-4 Turbo",
-                    "description": "更快的GPT-4版本"
-                },
-                {
-                    "id": "gpt-3.5-turbo",
-                    "name": "GPT-3.5 Turbo",
-                    "description": "快速且经济实惠的模型"
-                }
-            ]
-        }
-    }
-
-async def _get_groq_models(api_key: Optional[str] = None):
-    """获取GROQ模型列表"""
-    import httpx
-
-    # 如果有API key，尝试从GROQ API获取
-    if api_key:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(
-                    "https://api.groq.com/openai/v1/models",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json"
-                    }
-                )
-
-                if response.status_code == 200:
-                    data = response.json()
-                    groq_models = []
-                    for model in data.get("data", []):
-                        model_id = model.get("id", "")
-                        groq_models.append({
-                            "id": model_id,
-                            "name": model_id.replace("-", " ").title(),
-                            "description": f"GROQ {model_id} 模型"
-                        })
-
-                    return {
-                        "success": True,
-                        "message": "成功获取GROQ模型列表",
-                        "data": {
-                            "provider": "groq",
-                            "models": groq_models
-                        }
-                    }
-        except Exception as e:
-            pass  # 继续使用默认列表
-
-    # 返回默认GROQ模型列表
-    return {
-        "success": True,
-        "message": "使用默认GROQ模型列表",
-        "data": {
-            "provider": "groq",
-            "models": [
-                {
-                    "id": "llama-3.3-70b-versatile",
-                    "name": "Llama 3.3 70B (推荐)",
-                    "description": "最强大的推理模型，适合复杂任务"
-                },
-                {
-                    "id": "llama-3.1-8b-instant",
-                    "name": "Llama 3.1 8B",
-                    "description": "快速响应模型，适合简单任务"
-                }
-            ]
-        }
-    }
-
-async def _get_deepseek_models(api_key: Optional[str] = None):
-    """获取DeepSeek模型列表"""
-    import httpx
-
-    # 如果有API key，尝试从DeepSeek API获取
-    if api_key:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(
-                    "https://api.deepseek.com/v1/models",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json"
-                    }
-                )
-
-                if response.status_code == 200:
-                    data = response.json()
-                    deepseek_models = []
-                    for model in data.get("data", []):
-                        model_id = model.get("id", "")
-                        deepseek_models.append({
-                            "id": model_id,
-                            "name": model_id.replace("-", " ").title(),
-                            "description": f"DeepSeek {model_id} 模型"
-                        })
-
-                    return {
-                        "success": True,
-                        "message": "成功获取DeepSeek模型列表",
-                        "data": {
-                            "provider": "deepseek",
-                            "models": deepseek_models
-                        }
-                    }
-        except Exception as e:
-            pass  # 继续使用默认列表
-
-    # 返回默认DeepSeek模型列表
-    return {
-        "success": True,
-        "message": "使用默认DeepSeek模型列表",
-        "data": {
-            "provider": "deepseek",
-            "models": [
-                {
-                    "id": "deepseek-chat",
-                    "name": "DeepSeek Chat",
-                    "description": "DeepSeek对话模型"
-                },
-                {
-                    "id": "deepseek-coder",
-                    "name": "DeepSeek Coder",
-                    "description": "专为代码生成优化的模型"
-                }
-            ]
-        }
-    }
 
 def _get_tavily_models():
     """获取Tavily模型列表（固定）"""
@@ -424,13 +367,6 @@ def _get_tavily_models():
                 }
             ]
         }
-    }
-
-def _get_default_models(provider: str):
-    """获取默认模型列表"""
-    return {
-        "provider": provider,
-        "models": []
     }
 
 async def save_config_to_env_file(request: ConfigUpdateRequest):

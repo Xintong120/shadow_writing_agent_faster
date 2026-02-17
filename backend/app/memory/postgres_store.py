@@ -25,11 +25,11 @@ class SQLiteStore(BaseStore):
     - 轻量级（~1MB）
     """
     
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: str = "memory_store.db"):
         """初始化SQLite Store
         
         Args:
-            db_path: 数据库文件路径，默认为用户数据目录
+            db_path: 数据库文件路径，默认为当前目录的 memory_store.db
         """
         if db_path is None:
             # 自动选择用户数据目录
@@ -230,3 +230,35 @@ class SQLiteStore(BaseStore):
                 "db_size_mb": round(db_size / 1024 / 1024, 2),
                 "db_path": str(self.db_path)
             }
+    
+    def batch(self, operations: List[Tuple[str, Tuple[str, ...], str, Dict[str, Any]]]) -> List[Optional[Item]]:
+        """批量操作（同步）
+        
+        Args:
+            operations: 操作列表，每项为 (operation, namespace, key, value)
+                       operation 可以是 'put' 或 'get'
+        
+        Returns:
+            结果列表
+        """
+        results = []
+        for op, namespace, key, value in operations:
+            if op == "put":
+                self.put(namespace, key, value)
+                results.append(None)
+            elif op == "get":
+                results.append(self.get(namespace, key))
+            else:
+                results.append(None)
+        return results
+    
+    async def abatch(self, operations: List[Tuple[str, Tuple[str, ...], str, Dict[str, Any]]]) -> List[Optional[Item]]:
+        """批量操作（异步）
+        
+        Args:
+            operations: 操作列表
+        
+        Returns:
+            结果列表
+        """
+        return self.batch(operations)

@@ -1,7 +1,7 @@
 """Store Factory - 根据配置创建Store实例"""
 
 import os
-from typing import Optional
+from typing import Optional, Dict, Set
 from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 
@@ -11,7 +11,7 @@ def create_store() -> BaseStore:
     Returns:
         Store实例（InMemoryStore, SQLiteStore或PostgresStore）
     """
-    store_type = os.getenv("MEMORY_STORE_TYPE", "inmemory").lower()
+    store_type = os.getenv("MEMORY_STORE_TYPE", "sqlite").lower()
     
     if store_type == "sqlite":
         # Electron桌面应用：SQLite本地存储
@@ -91,6 +91,58 @@ def create_store() -> BaseStore:
 
 # 全局Store实例（单例模式）
 _global_store: Optional[BaseStore] = None
+_store_initialized = False
+
+def _sync_from_history_db(store: BaseStore) -> None:
+    """从 history_db 同步已看过的 TED 到 Memory Store"""
+    try:
+        from app.db import history_db
+        from app.memory.ted_history_memory import TEDHistoryMemory
+        
+        ted_memory = TEDHistoryMemory(store)
+        
+        # 获取所有历史记录
+        records = history_db.list_all(limit=1000)
+        
+        # 按 user_id 分组
+        user_urls: Dict[str, Dict[str, Dict]] = {}
+        for r in records:
+            ted_url = r.get('ted_url')
+            if not ted_url:
+                continue
+            
+            # 同步到 user_123 和 guest_user
+            for user_id in ['user_123', 'guest_user']:
+                if user_id not in user_urls:
+                    user_urls[user_id] = {}
+                user_urls[user_id][ted_url] = {
+                    'title': r.get('ted_title', 'Unknown'),
+                    'speaker': r.get('ted_speaker', 'Unknown')
+                }
+        
+        # 同步到 Memory Store
+        for user_id, url_info in user_urls.items():
+            for url, info in url_info.items():
+                # 检查是否已存在
+                if ted_memory.is_seen(user_id, url):
+                    continue
+                
+                ted_memory.add_seen_ted(
+                    user_id=user_id,
+                    url=url,
+                    title=info['title'],
+                    speaker=info['speaker'],
+                    search_topic='synced',
+                    metadata={'synced_from': 'history_db'}
+                )
+        
+        if user_urls:
+            total = sum(len(urls) for urls in user_urls.values())
+            print(f"[Memory] 从 history_db 同步了 {total} 条已看过的 TED")
+            
+    except Exception as e:
+        print(f"[Memory] 同步 history_db 失败: {e}")
+
 
 def get_global_store() -> BaseStore:
     """获取全局Store实例（单例）
@@ -98,9 +150,14 @@ def get_global_store() -> BaseStore:
     Returns:
         全局Store实例
     """
-    global _global_store
+    global _global_store, _store_initialized
     
     if _global_store is None:
         _global_store = create_store()
+    
+    # 首次初始化时从 history_db 同步
+    if not _store_initialized and _global_store is not None:
+        _store_initialized = True
+        _sync_from_history_db(_global_store)
     
     return _global_store

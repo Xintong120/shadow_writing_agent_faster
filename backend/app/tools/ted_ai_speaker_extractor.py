@@ -4,19 +4,12 @@ TED AI演讲者提取工具
 使用AI模型从Tavily搜索结果中智能提取演讲者信息
 """
 
-from app.utils import create_llm_function_light
+from app.services.llm.llm_provider import UnifiedLLMProvider
 import re
 import json
 
 
-class TedAISpeakerExtractor:
-    """TED AI演讲者提取器"""
-    
-    def __init__(self):
-        """初始化AI演讲者提取器"""
-        # 使用轻量级模型以提高响应速度
-        self.llm = create_llm_function_light(
-            system_prompt="""你是一个TED演讲专家，专门从TED演讲标题和内容中识别演讲者姓名。
+SYSTEM_PROMPT = """你是一个TED演讲专家，专门从TED演讲标题和内容中识别演讲者姓名。
 
 任务要求：
 1. 仔细分析提供的TED演讲信息
@@ -33,7 +26,15 @@ class TedAISpeakerExtractor:
 - TED演讲通常以演讲者姓名开头或包含在标题中
 - 排除明显的标题关键词（如"how to", "why we", "the power of"等）
 - 姓名通常包含首字母大写的英文单词"""
-        )
+
+
+class TedAISpeakerExtractor:
+    """TED AI演讲者提取器"""
+    
+    def __init__(self):
+        """初始化AI演讲者提取器"""
+        self.llm = UnifiedLLMProvider.create_for_purpose("default")
+        self.system_prompt = SYSTEM_PROMPT
     
     def extract_speaker_from_search_result(self, title: str, url: str, content: str = "", speaker_from_url: str = "") -> str:
         """
@@ -57,9 +58,13 @@ class TedAISpeakerExtractor:
             user_prompt = self._build_prompt(title, url, content, speaker_from_url)
             
             # 调用AI提取演讲者
-            response = self.llm(
-                user_prompt=user_prompt,
-                output_format={"speaker": "str"},
+            messages = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+            response = self.llm.call(
+                messages,
+                response_format={"speaker": "str"},
                 temperature=0.1
             )
             

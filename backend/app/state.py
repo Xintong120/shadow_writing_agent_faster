@@ -41,14 +41,15 @@ class Shadow_Writing_State(TypedDict):
 # 新增：单个Chunk的处理状态（用于子图）
 class ChunkProcessState(TypedDict):
     """单个语义块的处理状态
-    
-    【重要】不要包含与主State重复的字段（如ted_url），避免并发写入冲突
+
+    【重要】不要包含 task_id 等需要 SSE 推送的字段，避免并发写入冲突
+    task_id 和 total_chunks 只在子图节点中作为局部变量使用
     """
-    
+
     # 输入
     chunk_text: str                        # 当前语义块文本
     chunk_id: int                          # 块ID（用于日志追踪）
-    
+
     # 处理流程中间状态
     raw_shadow: Optional[dict]             # Shadow Writing原始结果
     validated_shadow: Optional[Ted_Shadows] # 验证通过的结果
@@ -56,9 +57,9 @@ class ChunkProcessState(TypedDict):
     quality_score: float                   # 质量分数
     quality_detail: Optional[dict]         # 质量评估详情
     corrected_shadow: Optional[Ted_Shadows] # 修正后的结果
-    
+
     # 最终输出（会被operator.add合并到主State的final_shadow_chunks）
     final_shadow_chunks: Annotated[List[Ted_Shadows], operator.add]  # 与主State同名！
-    
+
     # 错误处理
     error: Optional[str]                   # 错误信息

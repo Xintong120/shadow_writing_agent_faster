@@ -1,210 +1,444 @@
-// frontend/src/pages/LearningSessionPage.tsx
-// 学习会话页面 - 沉浸式学习界面
-
-import { useState, useEffect } from 'react'
-import { ArrowRight, MoreHorizontal } from 'lucide-react'
-import LearningCard from '@/components/LearningCard'
+import { useState, useEffect, useCallback } from 'react'
+import {
+  ArrowRight, MoreHorizontal, ChevronDown, ChevronUp,
+  Sparkles, PenTool, Plus, Loader2, Trash2
+} from 'lucide-react'
+import { toast } from 'sonner'
+import dJSON from 'dirty-json'
+import { useLearning } from '@/contexts/LearningContext'
 import { LearningItem } from '@/types/learning'
-import { api, convertShadowResultsToLearningItems } from '@/services/api'
-import { taskHistoryStorage } from '@/services/taskHistoryStorage'
-import { useAuth } from '@/contexts/AuthContext'
+import { saveUserPractice, getUserPractice } from '@/services/api'
+import { updateHistoryStatus } from '@/services/downloadApi'
+import { practiceStorage } from '@/utils/practiceStorage'
+import { practiceSync } from '@/utils/practiceSync'
+import { useQueryClient } from '@tanstack/react-query'
+import { ClickableText } from '@/components/ClickableText'
+import { WordPopup } from '@/components/WordPopup'
 
-interface LearningSessionPageProps {
-  taskId: string
-  onBack: () => void
-  onComplete?: () => void
+interface LearningCardProps {
+  data: LearningItem
+  index: number
+  userInputs: string[]
+  onChange: (inputs: string[]) => void
+  onDelete?: () => void
+  onWordClick: (word: string, x: number, y: number) => void
 }
 
-const LearningSessionPage = ({ taskId, onBack, onComplete }: LearningSessionPageProps) => {
-  const { authStatus } = useAuth()
-  const [content, setContent] = useState<LearningItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [sessionStartTime, setSessionStartTime] = useState<Date | null>(null)
+interface LearningSessionPageProps {
+  onBack?: () => void
+}
 
-  // 获取用户ID
-  const getUserId = () => authStatus === 'guest' ? 'guest_user' : 'user_123'
+const LearningCard = ({ data, index, userInputs, onChange, onDelete, onWordClick }: LearningCardProps) => {
+  const [isExpanded, setIsExpanded] = useState(false)
 
-  // 加载学习内容数据
+  const handleAddInput = () => onChange([...userInputs, ''])
+  const handleInputChange = (idx: number, value: string) => {
+    const newInputs = [...userInputs]
+    newInputs[idx] = value
+    onChange(newInputs)
+  }
+
+  return (
+    <div className="mb-8">
+      {/* 练习编号 */}
+      <div className="flex items-center gap-4 mb-4">
+        <div className="h-[1px] flex-1 bg-slate-200 dark:bg-slate-800"></div>
+        <span className="text-xs font-bold text-slate-400">练习 {index + 1}</span>
+        <div className="h-[1px] flex-1 bg-slate-200 dark:bg-slate-800"></div>
+      </div>
+
+      {/* 卡片 */}
+      <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+        {/* Original */}
+        <div className="p-6 bg-slate-50 dark:bg-slate-800/50 border-b border-slate-100 dark:border-slate-700">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Original</span>
+          </div>
+          <p className="text-xl font-serif text-slate-800 dark:text-slate-100 italic leading-relaxed">
+            <ClickableText text={data.original} onWordClick={onWordClick} />
+          </p>
+        </div>
+
+        {/* AI Mimic */}
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <div className="flex justify-between items-start">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <Sparkles size={14} className="text-indigo-500" />
+                <span className="text-xs font-bold text-indigo-500 uppercase tracking-wider">AI Mimic</span>
+              </div>
+              <p className="text-lg text-slate-700 dark:text-slate-200 font-medium">
+                <ClickableText text={data.mimic} onWordClick={onWordClick} />
+              </p>
+            </div>
+            <button
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors p-1"
+            >
+              {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+            </button>
+          </div>
+
+          {/* 词汇映射 - 可折叠 */}
+          {isExpanded && data.mapping && data.mapping.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-700">
+              {(() => {
+                const groupedByCategory = data.mapping.reduce((acc, item) => {
+                  const cat = item.category || 'General'
+                  if (!acc[cat]) acc[cat] = []
+                  acc[cat].push(item)
+                  return acc
+                }, {} as Record<string, typeof data.mapping>)
+
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {Object.values(groupedByCategory).map((items, idx) => {
+                      const pairs: Array<{ from: string; to: string }> = []
+                      for (let i = 0; i + 1 < items.length; i += 2) {
+                        pairs.push({ from: items[i].to, to: items[i + 1].to })
+                      }
+
+                      return pairs.map((pair, pairIdx) => (
+                        <div key={`${idx}-${pairIdx}`} className="flex items-center gap-2 text-sm bg-slate-50 dark:bg-slate-900/50 p-2 rounded border border-slate-200 dark:border-slate-700">
+                          <span className="text-slate-500 dark:text-slate-400">{pair.from}</span>
+                          <ArrowRight size={12} className="text-slate-300 dark:text-slate-600 flex-shrink-0" />
+                          <span className="font-semibold text-indigo-600 dark:text-indigo-400">{pair.to}</span>
+                        </div>
+                      ))
+                    })}
+                  </div>
+                )
+              })()}
+            </div>
+          )}
+        </div>
+
+        {/* Your Practice */}
+        <div className="p-6 bg-white dark:bg-slate-800">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <PenTool size={14} className="text-emerald-500" />
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Your Practice</span>
+            </div>
+            {onDelete && (
+              <button
+                onClick={onDelete}
+                className="flex items-center gap-1 text-xs text-slate-400 hover:text-red-500 transition-colors"
+              >
+                <Trash2 size={14} />
+                <span>删除练习</span>
+              </button>
+            )}
+          </div>
+          <div className="space-y-3">
+            {userInputs.map((input, idx) => (
+              <div key={idx} className="relative group/input animate-in fade-in slide-in-from-bottom-2">
+                <input
+                  type="text"
+                  value={input}
+                  onChange={(e) => handleInputChange(idx, e.target.value)}
+                  placeholder="在此输入你的模仿句子..."
+                  className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg pl-4 pr-24 py-3 text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all placeholder:text-slate-400"
+                />
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-focus-within/input:opacity-100 transition-opacity">
+                  {userInputs.length > 1 && (
+                    <button
+                      onClick={() => {
+                        const newInputs = userInputs.filter((_, i) => i !== idx)
+                        onChange(newInputs)
+                      }}
+                      className="p-1 text-slate-400 hover:text-red-500 transition-colors"
+                      title="删除此条"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+            <button
+              onClick={handleAddInput}
+              className="flex items-center gap-2 text-sm text-slate-500 hover:text-emerald-600 dark:text-slate-400 dark:hover:text-emerald-400 font-medium px-2 py-1 rounded-md hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+            >
+              <Plus size={16} />
+              <span>添加另一句模仿</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const LearningSessionPage = ({ onBack }: LearningSessionPageProps) => {
+  const { chunks, tedTitle, tedSpeaker, taskId } = useLearning()
+  const queryClient = useQueryClient()
+  const [isComplete, setIsComplete] = useState(false)
+  const [userPractices, setUserPractices] = useState<Record<number, string[]>>({})
+  const [isLoading, setIsLoading] = useState(true)
+
+  const [wordPopup, setWordPopup] = useState<{ word: string; x: number; y: number } | null>(null)
+
+  const handleWordClick = (word: string, x: number, y: number) => {
+    setWordPopup({ word, x, y })
+  }
+
+  const handleComplete = async () => {
+    practiceSync.stop()
+
+    if (taskId && Object.keys(userPractices).length > 0) {
+      const practiceData = Object.entries(userPractices).map(([index, inputs]) => ({
+        index: parseInt(index),
+        inputs,
+      }))
+      try {
+        await saveUserPractice(taskId, practiceData)
+        toast.success('练习已保存')
+      } catch (e) {
+        toast.error('保存失败')
+      }
+    }
+
+    if (taskId) {
+      practiceStorage.delete(taskId)
+      await updateHistoryStatus(taskId, 'completed')
+      queryClient.invalidateQueries({ queryKey: ['history'] })
+      console.log('[LearningSessionPage] 更新状态为 completed')
+    }
+
+    setIsComplete(true)
+  }
+
+  const handleDeletePractice = useCallback((index: number) => {
+    const newData = { ...userPractices }
+    delete newData[index]
+    setUserPractices(newData)
+    practiceSync.updateData(newData)
+  }, [userPractices])
+
+  const handlePracticeChange = useCallback((index: number, inputs: string[]) => {
+    const newData = { ...userPractices, [index]: inputs }
+    setUserPractices(newData)
+    practiceSync.updateData(newData)
+  }, [userPractices])
+
   useEffect(() => {
     if (!taskId) {
-      console.log('[LearningSessionPage] taskId为空，跳过加载')
+      setIsLoading(false)
       return
     }
 
-    const loadLearningContent = async () => {
-      try {
-        setLoading(true)
-        console.log('[LearningSessionPage] 开始加载学习内容，taskId:', taskId)
-        const taskData = await api.getTaskStatus(taskId)
-        console.log('[LearningSessionPage] 获取任务数据:', taskData)
-        console.log('[LearningSessionPage] 任务状态:', taskData.status)
-        console.log('[LearningSessionPage] results类型:', typeof taskData.results, '长度:', taskData.results?.length)
+    let initialData: Record<number, string[]> = {}
 
-        // 扁平化批量结果并转换为LearningItem格式
-        let flatResults: any[] = []
-        if (taskData.results && Array.isArray(taskData.results)) {
-          flatResults = taskData.results.flatMap((urlResult: any) => {
-            console.log('[LearningSessionPage] 处理urlResult:', urlResult.url, 'result_count:', urlResult.result_count)
-            return urlResult.results || []
+    const localData = practiceStorage.load(taskId)
+    if (localData && Object.keys(localData).length > 0) {
+      initialData = localData
+      setUserPractices(localData)
+      setIsLoading(false)
+    } else {
+      getUserPractice(taskId).then(practice => {
+        const practiceMap: Record<number, string[]> = {}
+        if (practice && Array.isArray(practice)) {
+          practice.forEach((p: { index: number; inputs: string[] }) => {
+            practiceMap[p.index] = p.inputs
           })
         }
-        console.log('[LearningSessionPage] 扁平化结果数量:', flatResults.length)
-        console.log('[LearningSessionPage] 扁平化结果样例:', flatResults.slice(0, 2))
-
-        const learningItems = convertShadowResultsToLearningItems(flatResults)
-        console.log('[LearningSessionPage] 转换后学习项目数量:', learningItems.length)
-        console.log('[LearningSessionPage] 学习项目样例:', learningItems.slice(0, 2))
-
-        setContent(learningItems)
-
-        if (learningItems.length === 0) {
-          console.log('[LearningSessionPage] 学习内容为空，设置错误')
-          setError('没有找到学习内容')
-        } else {
-          console.log('[LearningSessionPage] 成功加载学习内容')
-
-          // 设置会话开始时间
-          setSessionStartTime(new Date())
-
-          // 更新历史记录的学习时间
-          const userId = getUserId()
-          const now = new Date().toISOString()
-
-          // 为任务相关的所有演讲更新lastLearnedAt
-          try {
-            // 这里简化处理，实际可能需要从taskData中提取URLs
-            // 暂时为所有相关记录更新时间
-            console.log('[LearningSessionPage] 更新学习时间')
-          } catch (err) {
-            console.error('[LearningSessionPage] 更新学习时间失败:', err)
-          }
-        }
-      } catch (err) {
-        console.error('[LearningSessionPage] 加载学习内容失败:', err)
-        setError(err instanceof Error ? err.message : '加载学习内容失败')
-      } finally {
-        console.log('[LearningSessionPage] 设置loading为false')
-        setLoading(false)
-      }
+        setUserPractices(practiceMap)
+        setIsLoading(false)
+      }).catch(() => {
+        setIsLoading(false)
+      })
     }
 
-    loadLearningContent()
+    practiceSync.start(taskId, initialData)
+
+    return () => {
+      practiceSync.stop()
+    }
   }, [taskId])
 
-  // 处理学习时长记录
+  const [learningItems, setLearningItems] = useState<LearningItem[]>([])
+  const [parseErrors, setParseErrors] = useState<string[]>([])
+  const [debugInfo, setDebugInfo] = useState<string>("")
+
   useEffect(() => {
-    return () => {
-      // 组件卸载时记录学习时长
-      if (sessionStartTime && taskId) {
-        const durationSeconds = Math.floor((new Date().getTime() - sessionStartTime.getTime()) / 1000)
+    setIsLoading(true)
+    console.log("[LearningSessionPage] 收到 chunks:", chunks.length)
 
-        if (durationSeconds > 10) { // 只记录超过10秒的学习时长
-          const userId = getUserId()
-          // 为任务相关的所有演讲累加学习时长
-          // 这里需要从taskData中获取URLs，暂时简化处理
-          console.log(`[LearningSessionPage] 记录学习时长: ${durationSeconds}秒`)
-        }
+    const items: LearningItem[] = []
+    const errors: string[] = []
+
+    chunks.forEach((chunk, index) => {
+      try {
+        const parsed = typeof chunk === 'string' ? dJSON.parse(chunk) : chunk
+        console.log(`[LearningSessionPage] 解析练习 ${index + 1} 成功`)
+        const mapping = Array.isArray(parsed.mapping)
+          ? parsed.mapping
+          : Object.entries(parsed.map || {}).flatMap(([from, toList]) =>
+              Array.isArray(toList) ? toList.map((to: string) => ({ from, to })) : []
+            )
+
+        items.push({
+          id: index,
+          original: parsed.original || parsed.original_paragraph || '',
+          mimic: parsed.imitation || parsed.mimic || '',
+          mapping,
+        })
+      } catch (error) {
+        errors.push(`练习 ${index + 1}: ${(error as Error).message}`)
+        console.error(`[LearningSessionPage] 解析练习 ${index + 1} 失败:`, error)
       }
-    }
-  }, [sessionStartTime, taskId, authStatus])
+    })
 
-  // 处理完成练习
-  const handleComplete = async () => {
-    console.log('[LearningSessionPage] 完成按钮被点击，taskId:', taskId)
+    console.log("[LearningSessionPage] 最终 items:", items.length, "errors:", errors.length)
+    setDebugInfo(`items: ${items.length}, errors: ${errors.length}`)
+    setLearningItems(items)
+    setParseErrors(errors)
+    setIsLoading(false)
+  }, [chunks])
 
-    try {
-      // 需要从taskData中获取talkId，暂时使用简化逻辑
-      // 实际应该从content或taskData中提取talk信息
-      const userId = getUserId()
-
-      // 获取所有相关任务并更新状态为completed
-      // 这里简化处理，假设只有一个talk
-      // TODO: 从taskData中正确提取talkId
-      const tasks = await taskHistoryStorage.getTasks(userId)
-      const taskToUpdate = tasks.find(t => t.taskId === taskId)
-
-      if (taskToUpdate) {
-        console.log('[LearningSessionPage] 尝试更新任务状态为 completed, taskId:', taskId, 'talkId:', taskToUpdate.talkId)
-        await taskHistoryStorage.updateTaskStatus(taskId, taskToUpdate.talkId, 'completed')
-        console.log('[LearningSessionPage] 状态更新成功')
-
-        if (onComplete) {
-          onComplete()
-        }
-      } else {
-        console.warn('[LearningSessionPage] 未找到对应的任务记录')
-      }
-    } catch (error) {
-      console.error('[LearningSessionPage] 更新状态失败:', error)
-    }
-  }
-
-  if (loading) {
+  if (isComplete) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-          <p>加载学习内容...</p>
+          <div className="text-6xl mb-4">🎉</div>
+          <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-2">
+            练习完成！
+          </h1>
+          <p className="text-slate-600 dark:text-slate-400 mb-6">
+            你已完成本次学习
+          </p>
+          <button
+            onClick={onBack}
+            className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+          >
+            返回任务列表
+          </button>
         </div>
       </div>
     )
   }
 
-  if (error || content.length === 0) {
+  if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen">
-        <h1 className="text-2xl font-bold text-destructive mb-4">加载失败</h1>
-        <p className="text-muted-foreground mb-4">{error || '没有找到学习内容'}</p>
-        <button onClick={onBack}>
-          返回任务列表
-        </button>
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 size={40} className="animate-spin text-indigo-600 mx-auto mb-4" />
+          <p className="text-slate-600 dark:text-slate-400">加载中...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (learningItems.length === 0) {
+    if (parseErrors.length > 0 || debugInfo === "items: 0, errors: 0") {
+      return (
+        <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center">
+          <div className="text-center max-w-md">
+            <div className="text-6xl mb-4">🔍</div>
+            <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-2">
+              暂无学习内容
+            </h1>
+            <p className="text-slate-600 dark:text-slate-400 mb-4">
+              {debugInfo || "请从历史记录选择一个任务"}
+            </p>
+            {parseErrors.length > 0 && (
+              <div className="text-left text-sm text-red-600 mb-4 bg-red-50 dark:bg-red-900/20 p-3 rounded max-h-48 overflow-y-auto">
+                {parseErrors.map((err, i) => (
+                  <div key={i} className="mb-1">{err}</div>
+                ))}
+              </div>
+            )}
+            <div className="text-xs text-slate-500 mb-4 font-mono bg-slate-100 dark:bg-slate-800 p-2 rounded">
+              chunks: {chunks.length}
+            </div>
+            <button
+              onClick={onBack}
+              className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+            >
+              返回任务列表
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-6xl mb-4">📚</div>
+          <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-2">
+            暂无学习内容
+          </h1>
+          <p className="text-slate-600 dark:text-slate-400 mb-4">
+            请先选择一个任务开始学习
+          </p>
+          <button
+            onClick={onBack}
+            className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+          >
+            返回任务列表
+          </button>
+        </div>
       </div>
     )
   }
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8 pb-32">
-       {/* 顶部导航 */}
-       <div className="sticky top-0 z-10 bg-slate-50/90 dark:bg-slate-950/90 backdrop-blur-md py-4 mb-6 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
-           <button
-             onClick={onBack}
-             className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-white transition-colors"
-           >
-              <ArrowRight className="rotate-180" size={20} />
-              <span className="font-medium hidden sm:inline">返回任务列表</span>
-           </button>
-           <div className="text-center">
-              <h2 className="text-sm font-bold text-slate-900 dark:text-white line-clamp-1">学习会话</h2>
-              <p className="text-xs text-slate-500">{content.length} 个练习</p>
-           </div>
-           <button className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
-              <MoreHorizontal size={24} />
-           </button>
-       </div>
+      {/* 顶部导航 */}
+      <div className="sticky top-0 z-10 bg-white/90 dark:bg-slate-950/90 backdrop-blur-md py-4 mb-6 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-white transition-colors"
+        >
+          <ArrowRight className="rotate-180" size={20} />
+          <span className="hidden sm:inline">返回任务列表</span>
+        </button>
+        <div className="text-center">
+          <h2 className="text-sm font-bold text-slate-900 dark:text-white line-clamp-1">
+            {tedTitle || 'TED Learning'}
+          </h2>
+          <p className="text-xs text-slate-500">{tedSpeaker || 'Unknown Speaker'}</p>
+        </div>
+        <button className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
+          <MoreHorizontal size={24} />
+        </button>
+      </div>
 
-       {/* 练习卡片列表 */}
-       <div className="space-y-8 animate-in fade-in slide-in-from-bottom-8 duration-500">
-           {content.map((item, index) => (
-              <div key={item.id}>
-                 <div className="flex items-center gap-4 mb-4">
-                    <div className="h-[1px] flex-1 bg-slate-200 dark:bg-slate-800"></div>
-                    <span className="text-xs font-bold text-slate-400">练习 {index + 1}</span>
-                    <div className="h-[1px] flex-1 bg-slate-200 dark:bg-slate-800"></div>
-                 </div>
-                 <LearningCard data={item} />
-              </div>
-           ))}
+      {/* 练习卡片列表 */}
+      <div className="space-y-8 animate-in fade-in slide-in-from-bottom-8 duration-500">
+        {learningItems.map((item, index) => (
+          <LearningCard
+            key={item.id || index}
+            data={item}
+            index={index}
+            userInputs={userPractices[index] || ['']}
+            onChange={(inputs) => handlePracticeChange(index, inputs)}
+            onDelete={() => handleDeletePractice(index)}
+            onWordClick={handleWordClick}
+          />
+        ))}
 
-           <div className="text-center pt-10 pb-20">
-              <button
-                onClick={handleComplete}
-                className="bg-slate-900 dark:bg-indigo-600 text-white px-8 py-3 rounded-full font-bold shadow-lg hover:shadow-xl transition-all hover:-translate-y-1"
-              >
-                 完成本节练习 🎉
-              </button>
-           </div>
-       </div>
+        {/* 完成按钮 */}
+        <div className="text-center pt-10 pb-20">
+          <button
+            onClick={handleComplete}
+            className="bg-slate-900 dark:bg-indigo-600 text-white px-8 py-3 rounded-full font-bold shadow-lg hover:shadow-xl transition-all hover:-translate-y-1"
+          >
+            完成本节练习 🎉
+          </button>
+        </div>
+      </div>
+
+      {/* 单词释义弹窗 */}
+      {wordPopup && (
+        <WordPopup
+          word={wordPopup.word}
+          x={wordPopup.x}
+          y={wordPopup.y}
+          onClose={() => setWordPopup(null)}
+        />
+      )}
     </div>
   )
 }

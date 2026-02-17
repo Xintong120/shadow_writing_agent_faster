@@ -9,6 +9,7 @@ export interface LearningItem {
   mapping: Array<{
     from: string // 原文词汇
     to: string // 模仿词汇
+    category?: string // 词汇类别 (如 Activity_Context, Unexpected_Event 等)
   }>
 }
 

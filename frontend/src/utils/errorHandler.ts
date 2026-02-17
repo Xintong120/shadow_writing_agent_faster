@@ -6,6 +6,7 @@ import {
   ValidationError,
   WebSocketError,
   TimeoutError,
+  ProxyError,
 } from './errors'
 
 const IS_DEBUG = import.meta.env.VITE_ENABLE_DEBUG === 'true'
@@ -31,6 +32,9 @@ export function handleError(error: unknown, context?: string): void {
     console.error(`[Error] ${context || 'Unknown'}:`, error)
   }
 
+  // 检测是否是代理错误（通过错误消息或错误类型）
+  const isProxyError = _detectProxyError(error)
+
   // 根据错误类型显示不同提示
   if (error instanceof ValidationError) {
     toast.error(error.message, {
@@ -55,6 +59,23 @@ export function handleError(error: unknown, context?: string): void {
           }
         : undefined,
     })
+  } else if (error instanceof ProxyError) {
+    toast.error(error.message, {
+      description: error.details?.hint || '请检查系统代理设置，关闭代理后重试',
+      action: {
+        label: '重试',
+        onClick: () => window.location.reload(),
+      },
+    })
+  } else if (isProxyError) {
+    // 代理错误 - 专门提示
+    toast.error('代理连接被拒绝', {
+      description: '请检查系统代理设置，关闭代理后重试',
+      action: {
+        label: '重试',
+        onClick: () => window.location.reload(),
+      },
+    })
   } else if (error instanceof NetworkError) {
     toast.error(error.message, {
       description: '请检查网络连接',
@@ -64,7 +85,7 @@ export function handleError(error: unknown, context?: string): void {
       },
     })
   } else if (error instanceof TimeoutError) {
-    toast.error(error.message, {
+    toast.error(error.message || '请求超时', {
       description: '请稍后重试',
     })
   } else if (error instanceof WebSocketError) {
@@ -74,10 +95,69 @@ export function handleError(error: unknown, context?: string): void {
   } else if (error instanceof AppError) {
     toast.error(error.message)
   } else if (error instanceof Error) {
-    toast.error(error.message || ERROR_MESSAGES.UNKNOWN_ERROR)
+    // 检查错误消息中是否包含代理相关关键词
+    if (_containsProxyKeyword(error.message)) {
+      toast.error('代理连接被拒绝', {
+        description: '请检查系统代理设置，关闭代理后重试',
+      })
+    } else if (_containsTimeoutKeyword(error.message)) {
+      toast.error('请求超时', {
+        description: '请稍后重试',
+      })
+    } else {
+      toast.error(error.message || ERROR_MESSAGES.UNKNOWN_ERROR)
+    }
   } else {
     toast.error(ERROR_MESSAGES.UNKNOWN_ERROR)
   }
+}
+
+/**
+ * 检测错误是否为代理错误
+ */
+function _detectProxyError(error: unknown): boolean {
+  if (error instanceof Error) {
+    const msg = error.message.toLowerCase()
+    const proxyKeywords = [
+      'proxy',
+      '代理',
+      'proxyerror',
+      'winerror 10061',
+      '系统代理',
+    ]
+    return proxyKeywords.some(keyword => msg.includes(keyword))
+  }
+  return false
+}
+
+/**
+ * 检查错误消息是否包含代理关键词
+ */
+function _containsProxyKeyword(message: string): boolean {
+  const msg = message.toLowerCase()
+  const proxyKeywords = [
+    'proxy',
+    '代理',
+    'proxyerror',
+    'winerror 10061',
+    '系统代理',
+    '代理连接被拒绝',
+  ]
+  return proxyKeywords.some(keyword => msg.includes(keyword))
+}
+
+/**
+ * 检查错误消息是否包含超时关键词
+ */
+function _containsTimeoutKeyword(message: string): boolean {
+  const msg = message.toLowerCase()
+  const timeoutKeywords = [
+    'timeout',
+    '超时',
+    'timed out',
+    '连接超时',
+  ]
+  return timeoutKeywords.some(keyword => msg.includes(keyword))
 }
 
 /**

@@ -11,4 +11,4 @@ export interface NavMenuItem {
 }
 
 // 激活标签类型
-export type ActiveTab = 'chat' | 'history' | 'stats' | 'settings'
+export type ActiveTab = 'chat' | 'history' | 'downloads' | 'vocab' | 'stats' | 'settings'

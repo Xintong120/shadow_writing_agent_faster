@@ -80,6 +80,10 @@ docs/
  backend/**/*.pyc
  backend/data
 
+ # Backend 临时文件
+ backend/nul
+ backend/startup_log.txt
+
  ========================================Backend 数据和测试文件（可选）========================================
  如果不想上传数据缓存，取消下面的注释
  backend/data/ted_cache/
@@ -157,20 +161,29 @@ docs/
  # 前端备份目录（完整的备份项目，不应上传到Git）
  frontend_backup/
 
- # 临时或调试文档（已在第56-67行忽略，但需要确认）
- # 如果需要上传文档，删除下面的注释
-docs/
-
- # 移除__pycache__文件（已在第68-78行忽略，但需要确认这些文件不应上传）
- # 确认：__pycache__ 和 .pyc 文件不应上传到Git
-test/
-temp_upload/
-scripts/
-electron/
-node_modules
-test_connection_pool.py
-test_monitor.py
-
-# Additional ignores
+# 临时或调试文档（不上传）
 doc/
 langfuse_result/
+
+# 备份目录
+backup/
+
+# 临时文件
+nul
+telemetry-id
+dir
+2.0.0
+功能拓展.txt
+test_progress.txt
+test_sse_streaming.py
+test_ted.txt
+
+# 测试数据文件
+backend/app/data/debate/histories/*test*.json
+backend/app/data/debate/histories/*debug*.json
+
+# 移除__pycache__文件
+test/
+temp_upload/
+test_connection_pool.py
+test_monitor.py

@@ -9,7 +9,8 @@ export interface TedTalk {
   duration: string
   views: string
   description: string
-  thumbnail: string // 背景色类名，如 'bg-blue-100 dark:bg-blue-900/30'
+  thumbnail: string
+  url?: string
 }
 
 // TED基本信息（后端数据结构）

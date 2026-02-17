@@ -22,13 +22,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // 代理API请求到后端
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, '')
       },
-      // WebSocket代理
       '/ws': {
         target: 'ws://localhost:8000',
         ws: true

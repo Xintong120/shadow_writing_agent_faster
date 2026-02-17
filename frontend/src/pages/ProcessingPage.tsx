@@ -1,19 +1,78 @@
 // frontend/src/pages/ProcessingPage.tsx
 // 处理中页面 - 显示实时进度条和处理状态（通过WebSocket连接后端）
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { toast } from "sonner";
 import { sseService, sseProgressManager } from "@/services/progress";
 import { api } from "@/services/api";
 import type { BatchProgressMessage } from "@/types";
 
+let renderCount = 0;
+let lastProgressUpdate = 0;
+let lastLogUpdate = 0;
+const THROTTLE_MS = 300;
+
 interface ProcessingPageProps {
   taskId?: string | null;
   onFinish?: () => void;
-  onFirstChunkCompleted?: (taskId: string, receivedChunks: any[]) => void; // 新增：第一个chunk完成时的回调，传递已接收的chunks
+  onFirstChunkCompleted?: (taskId: string, receivedChunks: any[]) => void;
 }
 
-let renderCount = 0;
+interface ProgressCircleProps {
+  progress: number;
+  isConnected: boolean;
+}
+
+const ProgressCircle = memo(function ProgressCircle({ progress, isConnected }: ProgressCircleProps) {
+  const circleRef = useRef<SVGCircleElement>(null);
+  const percentRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (circleRef.current) {
+      const offset = 440 - (440 * progress) / 100;
+      circleRef.current.style.strokeDashoffset = String(offset);
+    }
+    if (percentRef.current) {
+      percentRef.current.textContent = `${Math.round(progress)}%`;
+    }
+  }, [progress]);
+
+  return (
+    <div className="relative w-40 h-40 mx-auto mb-8">
+      <svg className="w-full h-full transform -rotate-90">
+        <circle
+          cx="80"
+          cy="80"
+          r="70"
+          stroke="#e2e8f0"
+          strokeWidth="8"
+          fill="none"
+          className="dark:stroke-slate-700"
+        />
+        <circle
+          ref={circleRef}
+          cx="80"
+          cy="80"
+          r="70"
+          stroke="#6366f1"
+          strokeWidth="8"
+          fill="none"
+          strokeDasharray={440}
+          strokeDashoffset={440}
+          style={{ transition: "stroke-dashoffset 300ms ease-out" }}
+        />
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center flex-col">
+        <span ref={percentRef} className="text-3xl font-bold text-slate-800 dark:text-white">
+          {Math.round(progress)}%
+        </span>
+        <div
+          className={`w-3 h-3 rounded-full mt-2 ${isConnected ? "bg-green-500" : "bg-yellow-500 animate-pulse"}`}
+        />
+      </div>
+    </div>
+  );
+});
 
 const ProcessingPage = ({
   taskId,
@@ -32,7 +91,6 @@ const ProcessingPage = ({
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [useFallbackProgress, setUseFallbackProgress] = useState(false);
-  const [lastProgressUpdate, setLastProgressUpdate] = useState(Date.now());
   const [connectionTimeout, setConnectionTimeout] =
     useState<NodeJS.Timeout | null>(null);
   const [sseConnectionStatus, setSseConnectionStatus] =
@@ -44,14 +102,11 @@ const ProcessingPage = ({
   const [receivedChunks, setReceivedChunks] = useState<any[]>([]);
   const receivedChunksRef = useRef<any[]>([]);
 
-  // 预连接SSE - 页面加载时执行
   useEffect(() => {
     console.log("[ProcessingPage] 开始SSE预连接");
 
-    // 预连接到通用端点
     sseProgressManager.preConnect();
 
-    // 定期检查预连接状态
     const healthCheck = setInterval(() => {
       const health = sseProgressManager.getHealthStatus();
 
@@ -63,15 +118,13 @@ const ProcessingPage = ({
         console.warn("[ProcessingPage] SSE预连接失败，将使用标准连接");
       }
 
-      // 埋点：定期健康检查
       sseProgressManager.trackEvent("sse_health_check", health);
-    }, 2000); // 每2秒检查一次
+    }, 2000);
 
     return () => {
       clearInterval(healthCheck);
-      // 注意：不要在这里断开预连接，让它保持活跃
     };
-  }, []); // 只在组件挂载时执行一次
+  }, []);
 
   useEffect(() => {
     const useEffectStartTime = Date.now();
@@ -90,10 +143,8 @@ const ProcessingPage = ({
 
     console.log("[ProcessingPage] 开始SSE连接和API检查");
 
-    // 添加初始日志
     addLog("正在连接服务器...");
 
-    // SSE连接回调函数
     const sseCallbacks = {
       onConnected: () => {
         console.log("[ProcessingPage] SSE连接确认");
@@ -104,8 +155,10 @@ const ProcessingPage = ({
       },
 
       onProgress: (data: BatchProgressMessage) => {
+        const now = Date.now();
+        if (now - lastProgressUpdate < THROTTLE_MS) return;
+        lastProgressUpdate = now;
         console.log("[ProcessingPage] 收到进度消息:", data);
-        setLastProgressUpdate(Date.now());
 
         if (data.progress !== undefined) {
           setProgress(data.progress);
@@ -130,7 +183,6 @@ const ProcessingPage = ({
         if (data.message) addLog(data.message);
       },
 
-      // 新增语义块级别进度消息处理
       onChunkingStarted: (data: BatchProgressMessage) => {
         console.log("[ProcessingPage] 收到分块开始消息:", data);
         setCurrentStep("语义分块处理");
@@ -165,7 +217,6 @@ const ProcessingPage = ({
         addLog(`所有 ${data.total_chunks} 个语义块处理完成`);
       },
 
-      // 新增：监听第一个chunk完成消息
       onChunkCompleted: (data: BatchProgressMessage) => {
         console.log("[ProcessingPage] 收到chunk完成消息:", data);
         console.log(
@@ -173,7 +224,6 @@ const ProcessingPage = ({
           receivedChunks.length,
         );
 
-        // 使用ref确保同步更新
         receivedChunksRef.current = [...receivedChunksRef.current, data];
         setReceivedChunks(receivedChunksRef.current);
 
@@ -184,7 +234,6 @@ const ProcessingPage = ({
           timestamp: data.timestamp,
         });
 
-        // 只在第一次收到chunk完成消息时触发跳转
         if (!hasTriggeredRef.current && taskId && onFirstChunkCompleted) {
           console.log("[ProcessingPage] 触发第一次chunk完成跳转");
           console.log(
@@ -200,10 +249,9 @@ const ProcessingPage = ({
           addLog("第一个学习卡片已生成，开始学习模式！");
           setCurrentStep("跳转到学习页面...");
 
-          // 延迟一点时间让用户看到消息，然后跳转
           setTimeout(() => {
             console.log("[ProcessingPage] 执行跳转，调用onFirstChunkCompleted");
-            onFirstChunkCompleted(taskId, receivedChunksRef.current); // 传递完整的ref数组
+            onFirstChunkCompleted(taskId, receivedChunksRef.current);
           }, 1500);
         }
       },
@@ -249,7 +297,6 @@ const ProcessingPage = ({
       },
     };
 
-    // 检查是否已有SSE连接
     const isAlreadyConnected = sseService.isConnected();
     const currentTaskId = sseService.getCurrentTaskId();
 
@@ -259,7 +306,6 @@ const ProcessingPage = ({
       setIsConnected(true);
       setSseConnectionStatus("已连接");
     } else {
-      // 断开现有连接，建立新连接
       if (isAlreadyConnected) {
         console.log("[ProcessingPage] 断开现有SSE连接");
         sseService.disconnect();
@@ -269,7 +315,6 @@ const ProcessingPage = ({
       sseService.connect(taskId, sseCallbacks);
     }
 
-    // 并行检查任务状态
     const checkTaskStatus = async () => {
       try {
         const task = await api.getTaskStatus(taskId);
@@ -284,26 +329,24 @@ const ProcessingPage = ({
           "[ProcessingPage] 任务状态检查失败（可能因API key冷却超时）:",
           error,
         );
-        // 不显示错误，继续等待SSE消息
       }
     };
 
     checkTaskStatus();
 
-    // 清理函数
     return () => {
-      // 页面卸载时不断开连接，让SSE服务管理连接生命周期
       console.log("[ProcessingPage] 组件卸载，保持SSE连接");
     };
   }, [taskId]);
 
-  // 添加日志的辅助函数
-  const addLog = (message: string) => {
+  const addLog = useCallback((message: string) => {
+    const now = Date.now();
+    if (now - lastLogUpdate < THROTTLE_MS) return;
+    lastLogUpdate = now;
     const timestamp = new Date().toLocaleTimeString();
-    setLogs((prev) => [`[${timestamp}] ${message}`, ...prev].slice(0, 10)); // 保留最近10条日志
-  };
+    setLogs((prev) => [`[${timestamp}] ${message}`, ...prev].slice(0, 10));
+  }, []);
 
-  // 如果有错误，显示错误状态
   if (error) {
     return (
       <div className="max-w-xl mx-auto px-4 py-20 text-center">
@@ -322,38 +365,7 @@ const ProcessingPage = ({
   return (
     <div className="max-w-2xl mx-auto px-4 py-20">
       <div className="text-center mb-8">
-        <div className="relative w-40 h-40 mx-auto mb-8">
-          <svg className="w-full h-full transform -rotate-90">
-            <circle
-              cx="80"
-              cy="80"
-              r="70"
-              stroke="#e2e8f0"
-              strokeWidth="8"
-              fill="none"
-              className="dark:stroke-slate-700"
-            />
-            <circle
-              cx="80"
-              cy="80"
-              r="70"
-              stroke="#6366f1"
-              strokeWidth="8"
-              fill="none"
-              strokeDasharray={440}
-              strokeDashoffset={440 - (440 * progress) / 100}
-              className="transition-all duration-200 ease-out"
-            />
-          </svg>
-          <div className="absolute inset-0 flex items-center justify-center flex-col">
-            <span className="text-3xl font-bold text-slate-800 dark:text-white">
-              {Math.round(progress)}%
-            </span>
-            <div
-              className={`w-3 h-3 rounded-full mt-2 ${isConnected ? "bg-green-500" : "bg-yellow-500 animate-pulse"}`}
-            />
-          </div>
-        </div>
+        <ProgressCircle progress={progress} isConnected={isConnected} />
         <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">
           正在生成学习内容
         </h3>
@@ -364,7 +376,6 @@ const ProcessingPage = ({
         </div>
       </div>
 
-      {/* 日志区域 */}
       <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-4 max-h-64 overflow-y-auto">
         <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
           处理日志
@@ -385,7 +396,6 @@ const ProcessingPage = ({
         </div>
       </div>
 
-      {/* 任务ID显示 */}
       <div className="text-center mt-6">
         <p className="text-xs text-slate-400">任务ID: {taskId}</p>
       </div>

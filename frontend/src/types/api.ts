@@ -40,6 +40,33 @@ export interface ProviderModelsResponse {
   };
 }
 
+// ============ API 配置相关 ============
+
+export interface ApiConfig {
+  provider: string;
+  api_keys: string[];
+  model: string;
+  rotation_enabled: boolean;
+}
+
+export interface ApiConfigResponse {
+  success: boolean;
+  data: {
+    provider: string;
+    api_keys_count: number;
+    rotation_enabled: boolean;
+  };
+  message?: string;
+}
+
+export interface TavilyConfigResponse {
+  success: boolean;
+  data: {
+    api_key: string;
+    enabled: boolean;
+  };
+}
+
 export interface SearchResponse {
   candidates: TEDCandidate[];
   query: string;
@@ -68,6 +95,7 @@ export interface StartBatchRequest {
 
 export interface StartBatchResponse {
   task_id: string;
+  task_ids: string[];  // 新增：所有URL的task_id列表
   total: number;
   status: string;
 }

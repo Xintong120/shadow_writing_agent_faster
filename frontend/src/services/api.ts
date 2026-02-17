@@ -18,6 +18,7 @@ import type {
   GetLearningRecordsResponse,
   ApiKeyTestResponse,
 } from '@/types/api'
+import type { VocabItem } from '@/types/vocab'
 
 // ============ TED 搜索相关 ============
 
@@ -220,6 +221,151 @@ export const getProviderModels = async (provider: string, apiKey?: string) => {
   return response.data
 }
 
+// ============ API 配置（SQLite 加密存储） ============
+
+export const saveApiConfig = async (config: {
+  provider: string;
+  api_keys: string[];
+  model?: string;
+  rotation_enabled?: boolean;
+}): Promise<ApiConfigResponse> => {
+  const response = await fetchAPI<ApiConfigResponse>('/api/settings/api-config', {
+    method: 'POST',
+    body: JSON.stringify(config),
+  })
+
+  if (!response.success) {
+    handleError(new Error(response.error || '保存API配置失败'), 'saveApiConfig')
+    throw new Error(response.error || '保存API配置失败')
+  }
+
+  return response.data!
+}
+
+export const getApiConfig = async (provider: string): Promise<ApiConfigResponse> => {
+  const response = await fetchAPI<ApiConfigResponse>(`/api/settings/api-config/${provider}`, {
+    method: 'GET',
+  })
+
+  if (!response.success) {
+    handleError(new Error(response.error || '获取API配置失败'), 'getApiConfig')
+    throw new Error(response.error || '获取API配置失败')
+  }
+
+  return response.data!
+}
+
+export const getTavilyConfig = async (): Promise<TavilyConfigResponse> => {
+  const response = await fetchAPI<TavilyConfigResponse>('/api/settings/tavily-config', {
+    method: 'GET',
+  })
+
+  if (!response.success) {
+    handleError(new Error(response.error || '获取Tavily配置失败'), 'getTavilyConfig')
+    throw new Error(response.error || '获取Tavily配置失败')
+  }
+
+  return response.data!
+}
+
+export const updateTavilyConfig = async (config: {
+  api_key: string;
+  enabled: boolean;
+}): Promise<TavilyConfigResponse> => {
+  const response = await fetchAPI<TavilyConfigResponse>('/api/settings/tavily-config', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  })
+
+  if (!response.success) {
+    handleError(new Error(response.error || '更新Tavily配置失败'), 'updateTavilyConfig')
+    throw new Error(response.error || '更新Tavily配置失败')
+  }
+
+  return response.data!
+}
+
+// ============ Provider 列表（从 LLM_MODEL_MAP 动态获取） ============
+
+export interface ProviderOption {
+  value: string;
+  label: string;
+}
+
+export const getProviderOptions = async (): Promise<ProviderOption[]> => {
+  const response = await fetchAPI<{ success: boolean; providers: ProviderOption[] }>(
+    '/api/settings/providers',
+    { method: 'GET' }
+  )
+
+  if (!response.success) {
+    handleError(new Error(response.error || '获取 Provider 列表失败'), 'getProviderOptions')
+    throw new Error(response.error || '获取 Provider 列表失败')
+  }
+
+  return response.data?.providers || []
+}
+
+// ============ 用户练习保存接口 ============
+
+export const saveUserPractice = async (
+  taskId: string,
+  practice: Array<{ index: number; inputs: string[] }>
+) => {
+  const response = await fetchAPI(`/api/v1/tasks/${taskId}/user-practice`, {
+    method: 'PUT',
+    body: JSON.stringify({ practice }),
+  })
+
+  if (!response.success) {
+    handleError(new Error(response.error || '保存练习失败'), 'saveUserPractice')
+    throw new Error(response.error || '保存练习失败')
+  }
+
+  return response.data
+}
+
+export const getUserPractice = async (
+  taskId: string
+): Promise<Array<{ index: number; inputs: string[] }> | null> => {
+  const response = await fetchAPI<{ practice: Array<{ index: number; inputs: string[] }> }>(
+    `/api/v1/tasks/${taskId}/user-practice`,
+    {
+      method: 'GET',
+    }
+  )
+
+  if (!response.success) {
+    handleError(new Error(response.error || '获取练习失败'), 'getUserPractice')
+    throw new Error(response.error || '获取练习失败')
+  }
+
+  return response.data?.practice || null
+}
+
+// ============ 生词本 API ============
+
+export const syncVocabToServer = async (words: VocabItem[]): Promise<void> => {
+  const res = await fetch('/api/vocab/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ words })
+  })
+  if (!res.ok) throw new Error('Sync failed')
+}
+
+export const getVocabFromServer = async (): Promise<VocabItem[]> => {
+  const res = await fetch('/api/vocab')
+  if (!res.ok) throw new Error('Failed to fetch vocab')
+  const data = await res.json()
+  return data.words
+}
+
+export const deleteVocabFromServer = async (id: string): Promise<void> => {
+  const res = await fetch(`/api/vocab/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error('Delete failed')
+}
+
 // ============ 导出所有API ============
 
 export const api = {
@@ -233,6 +379,13 @@ export const api = {
   getSettings,
   updateSettings,
   getProviderModels,
+  saveUserPractice,
+  getUserPractice,
+  getProviderOptions,
+  saveApiConfig,
+  getApiConfig,
+  getTavilyConfig,
+  updateTavilyConfig,
 }
 
 // 导出工具函数（用于 ResultsPage 扁平化数据和 LearningSessionPage 数据转换）

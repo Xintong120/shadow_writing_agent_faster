@@ -19,9 +19,11 @@ langfuse>=2.0.0
 # LLM相关
 litellm>=1.0.0
 
-# Memory持久化（PostgreSQL）
-psycopg[binary,pool]>=3.1.0
-langgraph-checkpoint-postgres>=1.0.0
+# LangServe for debate module
+langserve>=0.0.20
+langchain>=0.1.0
+langchain-openai>=0.0.5
+langchain-core>=0.1.0
 
 # TED相关工具
 tavily-python>=0.3.0

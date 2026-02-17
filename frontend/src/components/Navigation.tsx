@@ -1,16 +1,27 @@
 // frontend/src/components/Navigation.tsx
 // 导航栏组件 - 包含桌面侧边栏和移动端底部导航
 
-import { MessageSquare, Library, BarChart2, Settings, LogOut, Sparkles } from 'lucide-react'
-import { NavMenuItem, ActiveTab } from '@/types/navigation'
+import {
+  MessageSquare,
+  Library,
+  Download,
+  BarChart2,
+  Settings,
+  LogOut,
+  Sparkles,
+  Book,
+} from 'lucide-react';
+import { NavMenuItem, ActiveTab } from '@/types/navigation';
 
 // 导航菜单项配置
 const menuItems: NavMenuItem[] = [
   { id: 'chat', icon: MessageSquare, label: 'AI 创作' },
   { id: 'history', icon: Library, label: '学习记录' },
+  { id: 'downloads', icon: Download, label: '任务队列' },
+  { id: 'vocab', icon: Book, label: '生词本' },
   { id: 'stats', icon: BarChart2, label: '数据统计' },
   { id: 'settings', icon: Settings, label: '系统设置' },
-]
+];
 
 interface NavigationProps {
   activeTab: ActiveTab

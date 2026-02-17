@@ -62,3 +62,15 @@ export class TimeoutError extends AppError {
     this.name = 'TimeoutError'
   }
 }
+
+/**
+ * 代理错误
+ */
+export class ProxyError extends AppError {
+  constructor(message: string = '代理连接失败') {
+    super(message, 'PROXY_ERROR', 502, { 
+      hint: '请检查系统代理设置，或关闭代理后重试' 
+    })
+    this.name = 'ProxyError'
+  }
+}
